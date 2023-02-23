@@ -1,10 +1,12 @@
+use log::info;
 use serenity::{
+    all::EditMessage,
     async_trait,
     http::Http,
     model::id::GuildId,
-    prelude::{Mutex, RwLock, TypeMap},
+    prelude::{RwLock, TypeMap},
 };
-use songbird::{tracks::TrackHandle, Call, Event, EventContext, EventHandler};
+use songbird::{Event, EventContext, EventHandler};
 use std::sync::Arc;
 
 use crate::{
@@ -13,18 +15,19 @@ use crate::{
         voteskip::forget_skip_votes,
     },
     guild::{cache::GuildCacheMap, settings::GuildSettingsMap},
+    utils::queue::{Queued, TrackQueue},
 };
 
 pub struct TrackEndHandler {
     pub guild_id: GuildId,
-    pub call: Arc<Mutex<Call>>,
+    pub queue: TrackQueue,
     pub ctx_data: Arc<RwLock<TypeMap>>,
 }
 
 pub struct ModifyQueueHandler {
     pub http: Arc<Http>,
     pub ctx_data: Arc<RwLock<TypeMap>>,
-    pub call: Arc<Mutex<Call>>,
+    pub queue: TrackQueue,
     pub guild_id: GuildId,
 }
 
@@ -40,9 +43,7 @@ impl EventHandler for TrackEndHandler {
             .unwrap_or_default();
 
         if autopause {
-            let handler = self.call.lock().await;
-            let queue = handler.queue();
-            queue.pause().ok();
+            self.queue.pause().ok();
         }
 
         drop(data_rlock);
@@ -55,11 +56,14 @@ impl EventHandler for TrackEndHandler {
 #[async_trait]
 impl EventHandler for ModifyQueueHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        let handler = self.call.lock().await;
-        let queue = handler.queue().current_queue();
-        drop(handler);
-
-        update_queue_messages(&self.http, &self.ctx_data, &queue, self.guild_id).await;
+        info!("Updating Queue song end...");
+        update_queue_messages(
+            &self.http,
+            &self.ctx_data,
+            &self.queue.current_queue(),
+            self.guild_id,
+        )
+        .await;
         None
     }
 }
@@ -67,7 +71,7 @@ impl EventHandler for ModifyQueueHandler {
 pub async fn update_queue_messages(
     http: &Arc<Http>,
     ctx_data: &Arc<RwLock<TypeMap>>,
-    tracks: &[TrackHandle],
+    tracks: &[Queued],
     guild_id: GuildId,
 ) {
     let data = ctx_data.read().await;
@@ -88,10 +92,12 @@ pub async fn update_queue_messages(
         let embed = create_queue_embed(tracks, *page);
 
         let edit_message = message
-            .edit(&http, |edit| {
-                edit.set_embed(embed);
-                edit.components(|components| build_nav_btns(components, *page, num_pages))
-            })
+            .edit(
+                &http,
+                EditMessage::new()
+                    .add_embed(embed)
+                    .components(build_nav_btns(*page, num_pages)),
+            )
             .await;
 
         if edit_message.is_err() {

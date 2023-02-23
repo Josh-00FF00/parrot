@@ -1,3 +1,5 @@
+use dashmap::DashMap;
+use log::info;
 use serenity::model::gateway::GatewayIntents;
 use songbird::serenity::SerenityInit;
 
@@ -6,6 +8,7 @@ use std::{collections::HashMap, env, error::Error};
 use crate::{
     guild::{cache::GuildCacheMap, settings::GuildSettingsMap},
     handlers::SerenityHandler,
+    utils::queue::TrackQueue,
 };
 
 pub struct Client {
@@ -31,9 +34,12 @@ impl Client {
             .register_songbird()
             .await?;
 
+        info!("Serenity initialised!");
+
         let mut data = client.data.write().await;
         data.insert::<GuildCacheMap>(HashMap::default());
         data.insert::<GuildSettingsMap>(HashMap::default());
+        data.insert::<TrackQueue>(DashMap::default());
         drop(data);
 
         Ok(Client { client })

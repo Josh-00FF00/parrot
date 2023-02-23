@@ -1,23 +1,20 @@
 use crate::{
-    errors::ParrotError, handlers::track_end::update_queue_messages,
-    messaging::message::ParrotMessage, utils::create_response,
+    errors::ParrotError,
+    handlers::track_end::update_queue_messages,
+    messaging::message::ParrotMessage,
+    utils::{create_response, queue::get_queue},
 };
 use rand::Rng;
-use serenity::{
-    client::Context,
-    model::application::interaction::application_command::ApplicationCommandInteraction,
-};
+use serenity::{all::CommandInteraction, client::Context};
 
 pub async fn shuffle(
     ctx: &Context,
-    interaction: &mut ApplicationCommandInteraction,
+    interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
-    let manager = songbird::get(ctx).await.unwrap();
-    let call = manager.get(guild_id).unwrap();
 
-    let handler = call.lock().await;
-    handler.queue().modify_queue(|queue| {
+    let queue = get_queue(ctx, guild_id).await;
+    queue.modify_queue(|queue| {
         // skip the first track on queue because it's being played
         fisher_yates(
             queue.make_contiguous()[1..].as_mut(),
@@ -25,12 +22,8 @@ pub async fn shuffle(
         )
     });
 
-    // refetch the queue after modification
-    let queue = handler.queue().current_queue();
-    drop(handler);
-
     create_response(&ctx.http, interaction, ParrotMessage::Shuffle).await?;
-    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
+    update_queue_messages(&ctx.http, &ctx.data, &queue.current_queue(), guild_id).await;
     Ok(())
 }
 

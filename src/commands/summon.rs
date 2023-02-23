@@ -3,13 +3,11 @@ use crate::{
     errors::ParrotError,
     handlers::{IdleHandler, TrackEndHandler},
     messaging::message::ParrotMessage,
-    utils::create_response,
+    utils::{create_response, queue::get_queue},
 };
 use serenity::{
+    all::{ChannelId, CommandInteraction},
     client::Context,
-    model::{
-        application::interaction::application_command::ApplicationCommandInteraction, id::ChannelId,
-    },
     prelude::Mentionable,
 };
 use songbird::{Event, TrackEvent};
@@ -17,17 +15,18 @@ use std::time::Duration;
 
 pub async fn summon(
     ctx: &Context,
-    interaction: &mut ApplicationCommandInteraction,
+    interaction: &mut CommandInteraction,
     send_reply: bool,
 ) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
-    let guild = ctx.cache.guild(guild_id).unwrap();
-
     let manager = songbird::get(ctx).await.unwrap();
+
+    let guild = ctx.cache.guild(guild_id).unwrap().clone();
     let channel_opt = get_voice_channel_for_user(&guild, &interaction.user.id);
+
     let channel_id = channel_opt.unwrap();
 
-    if let Some(call) = manager.get(guild.id) {
+    if let Some(call) = manager.get(guild_id) {
         let handler = call.lock().await;
         let has_current_connection = handler.current_connection().is_some();
 
@@ -39,10 +38,10 @@ pub async fn summon(
     }
 
     // join the channel
-    manager.join(guild.id, channel_id).await.1.unwrap();
+    manager.join(guild_id, channel_id).await.unwrap();
 
     // unregister existing events and register idle notifier
-    if let Some(call) = manager.get(guild.id) {
+    if let Some(call) = manager.get(guild_id) {
         let mut handler = call.lock().await;
 
         handler.remove_all_global_events();
@@ -53,7 +52,7 @@ pub async fn summon(
                 http: ctx.http.clone(),
                 manager,
                 interaction: interaction.clone(),
-                limit: 60 * 10,
+                limit: 60 * 10, //10 mins
                 count: Default::default(),
             },
         );
@@ -61,8 +60,8 @@ pub async fn summon(
         handler.add_global_event(
             Event::Track(TrackEvent::End),
             TrackEndHandler {
-                guild_id: guild.id,
-                call: call.clone(),
+                guild_id,
+                queue: get_queue(ctx, guild_id).await,
                 ctx_data: ctx.data.clone(),
             },
         );

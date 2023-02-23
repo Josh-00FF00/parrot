@@ -5,6 +5,8 @@ use std::error::Error;
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
 
+    env_logger::init();
+
     let mut parrot = Client::default().await?;
     if let Err(why) = parrot.start().await {
         println!("Fatality! Parrot crashed because: {:?}", why);
