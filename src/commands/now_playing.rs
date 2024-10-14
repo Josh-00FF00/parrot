@@ -2,7 +2,7 @@ use crate::{
     errors::ParrotError,
     utils::{create_embed_response, create_now_playing_embed, queue::get_queue},
 };
-use log::info;
+use tracing::info;
 use serenity::{all::CommandInteraction, client::Context};
 
 pub async fn now_playing(

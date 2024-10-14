@@ -1,4 +1,4 @@
-use log::info;
+use tracing::info;
 use serenity::{
     all::EditMessage,
     async_trait,

@@ -8,7 +8,10 @@ use crate::{
     errors::ParrotError,
     guild::settings::{GuildSettings, GuildSettingsMap},
     handlers::track_end::update_queue_messages,
-    sources::spotify::{Spotify, SPOTIFY},
+    sources::{
+        librespot::{Respot, RESPOT},
+        spotify::{Spotify, SPOTIFY},
+    },
     utils::create_response_text,
 };
 use log::error;
@@ -35,7 +38,8 @@ impl EventHandler for SerenityHandler {
         ctx.set_activity(Some(activity));
 
         // attempts to authenticate to spotify
-        *SPOTIFY.lock().await = Spotify::auth().await;
+        // *SPOTIFY.lock().await = Spotify::auth().await;
+        *RESPOT.lock() = Respot::auth("", "").await;
 
         // creates the global application commands
         self.create_commands(&ctx).await;

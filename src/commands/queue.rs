@@ -11,7 +11,7 @@ use crate::{
         queue::{get_queue, Queued},
     },
 };
-use log::info;
+use tracing::info;
 use serenity::{
     all::{
         ButtonStyle, CommandInteraction, CreateActionRow, CreateEmbedFooter,
@@ -136,7 +136,7 @@ pub fn create_queue_embed(tracks: &[Queued], page: usize) -> CreateEmbed {
     let (embed, description) = if !tracks.is_empty() {
         let metadata = tracks[0].clone().1;
         (
-            embed.thumbnail(metadata.thumbnail.as_ref().unwrap()),
+            embed,
             format!(
                 "[{}]({}) • `{}`",
                 metadata.title.as_ref().unwrap(),

@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
-use log::{info, warn};
 use parking_lot::Mutex;
 use serenity::all::Context;
 use songbird::{
@@ -13,6 +12,7 @@ use songbird::{
     Driver, Event, EventContext, EventHandler, TrackEvent,
 };
 use std::{collections::VecDeque, ops::Deref, sync::Arc, time::Duration};
+use tracing::{info, warn};
 
 /// A simple queue for several audio sources, designed to
 /// play in sequence.

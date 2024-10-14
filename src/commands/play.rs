@@ -8,6 +8,7 @@ use crate::{
         messages::{PLAY_QUEUE, PLAY_TOP, SPOTIFY_AUTH_FAILED, TRACK_DURATION, TRACK_TIME_TO_PLAY},
     },
     sources::{
+        self,
         spotify::{Spotify, SPOTIFY},
         youtube::YouTube,
     },
@@ -17,7 +18,6 @@ use crate::{
         queue::{get_queue, Queued, TrackQueue},
     },
 };
-use log::info;
 use reqwest::Client as HttpClient;
 use serenity::{
     all::{CommandInteraction, CreateEmbedFooter},
@@ -27,6 +27,7 @@ use serenity::{
 };
 use songbird::input::YoutubeDl;
 use songbird::{input::Input, tracks::Track, Call};
+use tracing::info;
 use std::{cmp::Ordering, error::Error as StdError, sync::Arc, time::Duration};
 use url::Url;
 
@@ -404,8 +405,11 @@ async fn enqueue_track(
     query_type: &QueryType,
 ) -> Result<Vec<Queued>, ParrotError> {
     // safeguard against ytdl dying on a private/deleted video and killing the playlist
-
-    let source = get_track_source(query_type.clone());
+    // let source = get_track_source(query_type.clone());
+    let source = sources::librespot::RespotTrack::new(
+        "6rlK7Cjk0sI77nepwHxRne",
+        sources::librespot::RESPOT.lock().as_ref().unwrap().clone(),
+    );
 
     let mut handler = call.lock().await;
     let track: Track = source.into();

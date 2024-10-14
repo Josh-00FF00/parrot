@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use log::info;
+use tracing::info;
 use serenity::model::gateway::GatewayIntents;
 use songbird::serenity::SerenityInit;
 

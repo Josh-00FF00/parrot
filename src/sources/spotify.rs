@@ -13,6 +13,8 @@ use rspotify::{
 use std::{env, str::FromStr};
 use tokio::sync::Mutex;
 
+use super::librespot::Respot;
+
 lazy_static! {
     pub static ref SPOTIFY: Mutex<Result<ClientCredsSpotify, ParrotError>> =
         Mutex::new(Err(ParrotError::Other("no auth attempts")));
