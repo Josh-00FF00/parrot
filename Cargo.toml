@@ -25,6 +25,9 @@ symphonia = "0.5.4"
 audiopus = "0.2.0"
 audiopus_sys = { version = "0.2.2", features = ["static"] }
 dashmap = "6.1.0"
+librespot = "0.4.2"
+snafu = { version = "0.8.5", features = ["backtrace"] }
+zerocopy = "0.8.5"
 
 [dependencies.rspotify]
 version = "0.12.0"

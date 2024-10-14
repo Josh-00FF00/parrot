@@ -2,6 +2,7 @@ use crate::messaging::messages::{
     FAIL_ANOTHER_CHANNEL, FAIL_AUTHOR_DISCONNECTED, FAIL_AUTHOR_NOT_FOUND,
     FAIL_NO_VOICE_CONNECTION, FAIL_WRONG_CHANNEL, NOTHING_IS_PLAYING, QUEUE_IS_EMPTY,
 };
+use crate::sources::librespot::RespotError;
 use rspotify::ClientError as RSpotifyClientError;
 use serenity::{model::mention::Mention, prelude::SerenityError};
 
@@ -25,6 +26,7 @@ pub enum ParrotError {
     AlreadyConnected(Mention),
     Serenity(SerenityError),
     RSpotify(RSpotifyClientError),
+    Respot(RespotError),
     IO(std::io::Error),
     Serde(serde_json::Error),
 }
