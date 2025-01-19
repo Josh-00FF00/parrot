@@ -1,10 +1,7 @@
 use std::{
     collections::VecDeque,
-    io::{Read, Seek, Write},
-    sync::{
-        mpsc::{self, channel, Receiver, Sender},
-        Arc,
-    },
+    io::{self, Read, Seek, Write},
+    thread,
     time::Duration,
 };
 
@@ -15,25 +12,19 @@ use librespot::{
         session::Session,
         spotify_id::{SpotifyId, SpotifyItemType},
     },
-    playback::{
-        audio_backend::{Sink, SinkError, SinkResult},
-        config::PlayerConfig,
-        convert::Converter,
-        decoder::AudioPacket,
-        mixer::NoOpVolume,
-        player::{Player, PlayerEvent, PlayerEventChannel},
-    },
+    playback::{audio_backend::SinkError, config::PlayerConfig, decoder::AudioPacket},
 };
 use parking_lot::Mutex;
 use serenity::async_trait;
 use snafu::Snafu;
-use songbird::input::{
-    AsyncAdapterStream, AudioStream, AudioStreamError, AuxMetadata, Compose, HttpRequest, Input,
-    RawAdapter,
-};
+use songbird::input::{AudioStream, AudioStreamError, AuxMetadata, Compose, Input, RawAdapter};
 use symphonia::core::io::MediaSource;
-use tracing::{debug, error, info, instrument};
+use tokio::{runtime::Handle, sync::oneshot};
+use tracing::{debug, info};
 use zerocopy::IntoBytes;
+
+use librespot::playback::player::Decoder;
+use librespot::playback::player::PlayerTrackLoader;
 
 use crate::errors::ParrotError;
 
@@ -42,27 +33,18 @@ pub static RESPOT: Mutex<Result<Respot, ParrotError>> =
 
 #[derive(Clone)]
 pub struct Respot {
-    ims: InMemorySink,
     session: Session,
-    player: Arc<Player>,
 }
 
-static OAUTH_SCOPES: &[&str] = &[
-    "streaming",
-    "user-modify-playback-state",
-    "openid",
-    "user-read-email",
-    "user-read-private",
-    "playlist-read",
-    "playlist-read-collaborative",
-    "playlist-read-private",
-    "app-remote-control",
-];
+impl Respot {
+    pub fn get_session(&self) -> Session {
+        self.session.clone()
+    }
+}
 
 impl Respot {
     pub async fn auth(username: &str, password: &str) -> Result<Self, ParrotError> {
         let session_config = SessionConfig::default();
-        let player_config = PlayerConfig::default();
 
         let credentials = Credentials::with_access_token("");
         // let credentials = Credentials::with_password(username, password);
@@ -71,76 +53,9 @@ impl Respot {
         let session = Session::new(session_config, None);
         session.connect(credentials, false).await.unwrap();
 
-        let ims = InMemorySink::new();
-        let ims_c = ims.clone();
-
-        let player = Player::new(
-            player_config,
-            session.clone(),
-            Box::new(NoOpVolume),
-            move || Box::new(ims_c),
-        );
-
         info!("CONNECTED");
 
-        Ok(Self {
-            player,
-            ims,
-            session,
-        })
-    }
-}
-
-impl Sink for InMemorySink {
-    fn start(&mut self) -> SinkResult<()> {
-        Ok(())
-    }
-
-    fn stop(&mut self) -> SinkResult<()> {
-        Ok(())
-    }
-
-    fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        match packet {
-            AudioPacket::Samples(samples) => {
-                let samples_f32: &[f32] = &converter.f64_to_f32(&samples);
-                self.0.write_bytes(samples_f32.as_bytes())
-            }
-            AudioPacket::Raw(samples) => self.0.write_bytes(&samples),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct InMemorySink(Arc<InMemorySinkInner>);
-
-impl InMemorySink {
-    fn new() -> Self {
-        Self(InMemorySinkInner::new().into())
-    }
-}
-
-struct InMemorySinkInner {
-    buf: Mutex<VecDeque<u8>>,
-    r: Receiver<Box<[u8]>>,
-    w: Sender<Box<[u8]>>,
-}
-
-impl InMemorySinkInner {
-    fn new() -> Self {
-        let (w, r) = mpsc::channel();
-        Self {
-            buf: Mutex::new(VecDeque::new()),
-            r,
-            w,
-        }
-    }
-
-    fn write_bytes(&self, bytes: &[u8]) -> SinkResult<()> {
-        info!("Writing {} bytes into ims", bytes.len());
-        let _ = self.buf.lock().write_all(bytes);
-        let _ = self.w.send(bytes.into());
-        Ok(())
+        Ok(Self { session })
     }
 }
 
@@ -163,8 +78,7 @@ impl From<RespotError> for SinkError {
 
 pub struct RespotTrack {
     track: SpotifyId,
-    player: Arc<Player>,
-    ims: InMemorySink,
+    session: Session,
 }
 
 impl RespotTrack {
@@ -172,55 +86,26 @@ impl RespotTrack {
         let mut track = SpotifyId::from_base62(id).unwrap();
         info!("Playing {}...", track);
         track.item_type = SpotifyItemType::Track;
-        let player = respot.player.clone();
-        let ims = respot.ims.clone();
 
-        Self { player, ims, track }
-    }
-}
-
-impl Read for InMemorySinkRunning {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        info!("Doing read of len {} ims", buf.len());
-
-        loop {
-            match self.events.try_recv() {
-                Ok(e) => match e {
-                    PlayerEvent::EndOfTrack { .. } => {
-                        info!("End of track!");
-                        return Ok(0);
-                    }
-                    _ => {}
-                },
-                Err(_) => {}
-            }
-
-            let mut b = self
-                .ims
-                .0
-                .r
-                .recv()
-                .map_err(|_| std::io::Error::other("recv fail".into()))?;
-            let read = b.read(buf);
-
-            info!("ACTUAL READ, {:?}", read);
-            return read;
+        Self {
+            track,
+            session: respot.get_session(),
         }
     }
 }
 
-impl Seek for InMemorySinkRunning {
+struct RespotDecoder {
+    decoder: Mutex<Decoder>,
+    internal_buffer: VecDeque<u8>,
+}
+
+impl Seek for RespotDecoder {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        todo!()
+        todo!();
     }
 }
 
-struct InMemorySinkRunning {
-    ims: InMemorySink,
-    events: PlayerEventChannel,
-}
-
-impl MediaSource for InMemorySinkRunning {
+impl MediaSource for RespotDecoder {
     fn is_seekable(&self) -> bool {
         false
     }
@@ -230,17 +115,65 @@ impl MediaSource for InMemorySinkRunning {
     }
 }
 
+impl Read for RespotDecoder {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut d = self.decoder.lock();
+
+        debug!("Doing read of len {}", buf.len());
+        while let Some((_, pkt)) = d.next_packet().map_err(|_| io::Error::other("aaaaa"))? {
+            match pkt {
+                AudioPacket::Samples(samples) => {
+                    for b in samples.into_iter() {
+                        self.internal_buffer.write((b as f32).as_bytes()).unwrap();
+                    }
+                }
+                AudioPacket::Raw(vec) => {
+                    self.internal_buffer.write(&vec).unwrap();
+                }
+            }
+
+            if self.internal_buffer.len() >= buf.len() {
+                break;
+            }
+        }
+        self.internal_buffer.read(buf)
+    }
+}
+
 #[async_trait]
 impl Compose for RespotTrack {
     fn create(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        self.player.load(self.track, true, 0);
+        Err(AudioStreamError::Unsupported)
+    }
 
-        info!("Starting Compose for RespotTrack");
+    async fn create_async(
+        &mut self,
+    ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+        let ptl = PlayerTrackLoader {
+            session: self.session.clone(),
+            config: PlayerConfig::default(),
+        };
 
+        info!("Creating in async!");
+
+        let handle = Handle::current();
+        let t = self.track.clone();
+        let (result_tx, result_rx) = oneshot::channel();
+
+        thread::spawn(move || {
+            let data = handle.block_on(ptl.load_track(t, 0));
+            if let Some(data) = data {
+                let _ = result_tx.send(data);
+            }
+        });
+
+        let track = result_rx.await.unwrap();
+
+        info!("Got track");
         let input: Box<dyn MediaSource> = Box::new(RawAdapter::new(
-            InMemorySinkRunning {
-                ims: self.ims.clone(),
-                events: self.player.get_player_event_channel(),
+            RespotDecoder {
+                decoder: Mutex::new(track.decoder),
+                internal_buffer: VecDeque::new(),
             },
             44100,
             2,
@@ -249,29 +182,23 @@ impl Compose for RespotTrack {
         Ok(AudioStream { input, hint: None })
     }
 
-    async fn create_async(
-        &mut self,
-    ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        Err(AudioStreamError::Unsupported)
-    }
-
     fn should_create_async(&self) -> bool {
-        false
+        true
     }
 
     async fn aux_metadata(&mut self) -> Result<AuxMetadata, AudioStreamError> {
         Ok(AuxMetadata {
             track: Some("dank memers track".to_string()),
-            artist: Some("Dankus memers".to_string()),
-            album: Some("Dankus memers".to_string()),
-            date: Some("Dankus memers".to_string()),
+            artist: Some(" memers".to_string()),
+            album: Some(" memers".to_string()),
+            date: Some(" memers".to_string()),
             channels: Some(2),
-            channel: Some("Dankus memers".to_string()),
+            channel: Some(" memers".to_string()),
             start_time: Some(Duration::from_secs(0)),
             duration: Some(Duration::from_secs(200)),
             sample_rate: None,
-            source_url: Some("http://fuck.what/ever".to_string()),
-            title: Some("Dankus memers".to_string()),
+            source_url: Some("http://what/ever".to_string()),
+            title: Some("memers".to_string()),
             thumbnail: Some("http://sfjdisfhjsdih/sdfji.png".to_string()),
         })
     }

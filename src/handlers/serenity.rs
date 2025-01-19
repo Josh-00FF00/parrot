@@ -14,7 +14,7 @@ use crate::{
     },
     utils::create_response_text,
 };
-use log::error;
+use tracing::error;
 use serenity::{
     all::{
         ActivityData, Command, CommandInteraction, CommandOptionType, CreateCommand,
