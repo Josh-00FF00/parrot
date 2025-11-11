@@ -1,12 +1,10 @@
 use crate::{
     errors::{verify, ParrotError},
     messaging::message::ParrotMessage,
-    utils::{
-        create_response,
-        queue::{get_queue, Queued, TrackQueue},
-    },
+    utils::{create_response, track_to_meta},
 };
 use serenity::{all::CommandInteraction, client::Context};
+use songbird::tracks::{TrackHandle, TrackQueue};
 use std::cmp::min;
 
 pub async fn skip(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
@@ -15,7 +13,10 @@ pub async fn skip(ctx: &Context, interaction: &mut CommandInteraction) -> Result
 
     let to_skip = args.first().and_then(|a| a.value.as_i64()).unwrap_or(1) as usize;
 
-    let queue = get_queue(ctx, guild_id).await;
+    let manager = songbird::get(ctx).await.unwrap();
+    let call = manager.get(guild_id).unwrap();
+    let handler = call.lock().await;
+    let queue = handler.queue();
 
     verify(!queue.is_empty(), ParrotError::NothingPlaying)?;
 
@@ -35,19 +36,21 @@ pub async fn create_skip_response(
     tracks_to_skip: usize,
 ) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
-    let queue = get_queue(ctx, guild_id).await;
+    let manager = songbird::get(ctx).await.unwrap();
+    let call = manager.get(guild_id).unwrap();
+
+    let handler = call.lock().await;
+    let queue = handler.queue();
 
     match queue.current() {
         Some(track) => {
-            create_response(
-                &ctx.http,
-                interaction,
-                ParrotMessage::SkipTo {
-                    title: track.1.title.unwrap(),
-                    url: track.1.source_url.unwrap(),
-                },
-            )
-            .await
+            let meta = track_to_meta(&track);
+            let title = meta.title.clone().unwrap_or("Missing Title".to_string());
+            let url = meta
+                .source_url
+                .clone()
+                .unwrap_or("Missing Source Url".to_string());
+            create_response(&ctx.http, interaction, ParrotMessage::SkipTo { title, url }).await
         }
         None => {
             if tracks_to_skip > 1 {
@@ -59,7 +62,7 @@ pub async fn create_skip_response(
     }
 }
 
-pub async fn force_skip_top_track(queue: &TrackQueue) -> Result<Vec<Queued>, ParrotError> {
+pub async fn force_skip_top_track(queue: &TrackQueue) -> Result<Vec<TrackHandle>, ParrotError> {
     // this is an odd sequence of commands to ensure the queue is properly updated
     // apparently, skipping/stopping a track takes a while to remove it from the queue
     // also, manually removing tracks doesn't trigger the next track to play

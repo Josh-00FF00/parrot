@@ -1,8 +1,6 @@
 use crate::{
-    errors::ParrotError,
-    handlers::track_end::update_queue_messages,
-    messaging::message::ParrotMessage,
-    utils::{create_response, queue::get_queue},
+    errors::ParrotError, handlers::track_end::update_queue_messages,
+    messaging::message::ParrotMessage, utils::create_response,
 };
 use rand::Rng;
 use serenity::{all::CommandInteraction, client::Context};
@@ -12,8 +10,11 @@ pub async fn shuffle(
     interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
+    let manager = songbird::get(ctx).await.unwrap();
+    let call = manager.get(guild_id).unwrap();
 
-    let queue = get_queue(ctx, guild_id).await;
+    let handler = call.lock().await;
+    let queue = handler.queue();
     queue.modify_queue(|queue| {
         // skip the first track on queue because it's being played
         fisher_yates(

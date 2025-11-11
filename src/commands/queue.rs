@@ -6,12 +6,8 @@ use crate::{
         QUEUE_EXPIRED, QUEUE_NOTHING_IS_PLAYING, QUEUE_NOW_PLAYING, QUEUE_NO_SONGS, QUEUE_PAGE,
         QUEUE_PAGE_OF, QUEUE_UP_NEXT,
     },
-    utils::{
-        get_human_readable_timestamp,
-        queue::{get_queue, Queued},
-    },
+    utils::{get_human_readable_timestamp, track_to_meta},
 };
-use tracing::info;
 use serenity::{
     all::{
         ButtonStyle, CommandInteraction, CreateActionRow, CreateEmbedFooter,
@@ -23,7 +19,7 @@ use serenity::{
     model::{channel::Message, id::GuildId},
     prelude::{RwLock, TypeMap},
 };
-use songbird::{Event, TrackEvent};
+use songbird::{tracks::TrackHandle, Event, TrackEvent};
 use std::{
     cmp::{max, min},
     fmt::Write,
@@ -31,6 +27,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tracing::info;
 
 const EMBED_PAGE_SIZE: usize = 6;
 const EMBED_TIMEOUT: u64 = 3600;
@@ -40,7 +37,8 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
     let manager = songbird::get(ctx).await.unwrap();
     let call = manager.get(guild_id).unwrap();
 
-    let queue = get_queue(ctx, guild_id).await;
+    let handler = call.lock().await;
+    let queue = handler.queue();
 
     info!("Making interaction response");
     let num_pages = calculate_num_pages(&queue.current_queue());
@@ -75,7 +73,7 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
         ModifyQueueHandler {
             http: ctx.http.clone(),
             ctx_data: ctx.data.clone(),
-            queue,
+            call: call.clone(),
             guild_id,
         },
     );
@@ -89,7 +87,10 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
         let btn_id = &mci.data.custom_id;
 
         // refetch the queue in case it changed
-        let queue = get_queue(ctx, guild_id).await;
+        let manager = songbird::get(ctx).await.unwrap();
+        let call = manager.get(guild_id).unwrap();
+        let handler = call.lock().await;
+        let queue = handler.queue();
 
         let num_pages = calculate_num_pages(&queue.current_queue());
         let mut page_wlock = page.write().await;
@@ -129,12 +130,12 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
     Ok(())
 }
 
-pub fn create_queue_embed(tracks: &[Queued], page: usize) -> CreateEmbed {
+pub fn create_queue_embed(tracks: &[TrackHandle], page: usize) -> CreateEmbed {
     let embed: CreateEmbed =
         CreateEmbed::default().field(QUEUE_UP_NEXT, build_queue_page(tracks, page), false);
 
     let (embed, description) = if !tracks.is_empty() {
-        let metadata = tracks[0].clone().1;
+        let metadata = track_to_meta(&tracks[0]);
         (
             embed,
             format!(
@@ -178,9 +179,9 @@ pub fn build_nav_btns(page: usize, num_pages: usize) -> Vec<CreateActionRow> {
     ])]
 }
 
-fn build_queue_page(tracks: &[Queued], page: usize) -> String {
+fn build_queue_page(tracks: &[TrackHandle], page: usize) -> String {
     let start_idx = EMBED_PAGE_SIZE * page;
-    let queue: Vec<&Queued> = tracks
+    let queue: Vec<&TrackHandle> = tracks
         .iter()
         .skip(start_idx + 1)
         .take(EMBED_PAGE_SIZE)
@@ -193,7 +194,7 @@ fn build_queue_page(tracks: &[Queued], page: usize) -> String {
     let mut description = String::new();
 
     for (i, queued) in queue.iter().enumerate() {
-        let metadata = queued.1.clone();
+        let metadata = track_to_meta(queued).clone();
         let title = metadata.title.as_ref().unwrap();
         let url = metadata.source_url.as_ref().unwrap();
         let duration = get_human_readable_timestamp(metadata.duration);

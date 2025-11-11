@@ -3,7 +3,7 @@ use crate::{
     errors::ParrotError,
     handlers::{IdleHandler, TrackEndHandler},
     messaging::message::ParrotMessage,
-    utils::{create_response, queue::get_queue},
+    utils::create_response,
 };
 use serenity::{
     all::{ChannelId, CommandInteraction},
@@ -12,6 +12,7 @@ use serenity::{
 };
 use songbird::{Event, TrackEvent};
 use std::time::Duration;
+use tracing::{error, info};
 
 pub async fn summon(
     ctx: &Context,
@@ -37,8 +38,11 @@ pub async fn summon(
         }
     }
 
-    // join the channel
-    manager.join(guild_id, channel_id).await.unwrap();
+    info!("Joining channel! {guild_id},{channel_id}");
+
+    if let Err(e) = manager.join(guild_id, channel_id).await {
+        error!("Joining failed???? {e:?}");
+    }
 
     // unregister existing events and register idle notifier
     if let Some(call) = manager.get(guild_id) {
@@ -61,7 +65,7 @@ pub async fn summon(
             Event::Track(TrackEvent::End),
             TrackEndHandler {
                 guild_id,
-                queue: get_queue(ctx, guild_id).await,
+                call: call.clone(),
                 ctx_data: ctx.data.clone(),
             },
         );

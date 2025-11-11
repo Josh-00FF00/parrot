@@ -2,12 +2,10 @@ use crate::{
     errors::{verify, ParrotError},
     handlers::track_end::update_queue_messages,
     messaging::{message::ParrotMessage, messages::REMOVED_QUEUE},
-    utils::{
-        create_embed_response, create_response,
-        queue::{get_queue, Queued},
-    },
+    utils::{create_embed_response, create_response, track_to_meta},
 };
 use serenity::{all::CommandInteraction, builder::CreateEmbed, client::Context};
+use songbird::tracks::TrackHandle;
 use std::cmp::min;
 
 pub async fn remove(
@@ -23,7 +21,10 @@ pub async fn remove(
         .and_then(|a| a.value.as_i64())
         .unwrap_or(remove_index as i64) as usize;
 
-    let queue = get_queue(ctx, guild_id).await;
+    let manager = songbird::get(ctx).await.unwrap();
+    let call = manager.get(guild_id).unwrap();
+    let handler = call.lock().await;
+    let queue = handler.queue();
 
     let queue_len = queue.len();
     let remove_until = min(remove_until, queue_len.saturating_sub(1));
@@ -60,8 +61,8 @@ pub async fn remove(
     Ok(())
 }
 
-async fn create_remove_enqueued_embed(track: &Queued) -> CreateEmbed {
-    let metadata = &track.1;
+async fn create_remove_enqueued_embed(track: &TrackHandle) -> CreateEmbed {
+    let metadata = track_to_meta(&track);
     CreateEmbed::default()
         .field(
             REMOVED_QUEUE,

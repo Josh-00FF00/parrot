@@ -4,7 +4,7 @@ use crate::{
         message::ParrotMessage,
         messages::{FAIL_MINUTES_PARSING, FAIL_SECONDS_PARSING},
     },
-    utils::{create_response, queue::get_queue},
+    utils::create_response,
 };
 use serenity::{all::CommandInteraction, client::Context};
 use std::time::Duration;
@@ -25,10 +25,11 @@ pub async fn seek(ctx: &Context, interaction: &mut CommandInteraction) -> Result
     let timestamp = minutes * 60 + seconds;
 
     let guild_id = interaction.guild_id.unwrap();
-    let track = get_queue(ctx, guild_id)
-        .await
-        .current()
-        .ok_or(ParrotError::NothingPlaying)?;
+    let manager = songbird::get(ctx).await.unwrap();
+    let call = manager.get(guild_id).unwrap();
+
+    let handler = call.lock().await;
+    let track = handler.queue().current().ok_or(ParrotError::QueueEmpty)?;
 
     // This cb will contain success results, idc
     let _ = track.seek(Duration::from_secs(timestamp));

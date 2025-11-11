@@ -1,5 +1,6 @@
 use parrot::client::Client;
 use std::error::Error;
+use tracing::error;
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -13,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut parrot = Client::default().await?;
     if let Err(why) = parrot.start().await {
-        println!("Fatality! Parrot crashed because: {:?}", why);
+        error!("Fatality! Parrot crashed because: {:?}", why);
     };
 
     Ok(())

@@ -1,4 +1,3 @@
-use tracing::info;
 use serenity::{
     all::EditMessage,
     async_trait,
@@ -6,8 +5,11 @@ use serenity::{
     model::id::GuildId,
     prelude::{RwLock, TypeMap},
 };
-use songbird::{Event, EventContext, EventHandler};
+use songbird::tracks::TrackHandle;
+use songbird::{Call, Event, EventContext, EventHandler};
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
 
 use crate::{
     commands::{
@@ -15,19 +17,18 @@ use crate::{
         voteskip::forget_skip_votes,
     },
     guild::{cache::GuildCacheMap, settings::GuildSettingsMap},
-    utils::queue::{Queued, TrackQueue},
 };
 
 pub struct TrackEndHandler {
     pub guild_id: GuildId,
-    pub queue: TrackQueue,
+    pub call: Arc<Mutex<Call>>,
     pub ctx_data: Arc<RwLock<TypeMap>>,
 }
 
 pub struct ModifyQueueHandler {
     pub http: Arc<Http>,
     pub ctx_data: Arc<RwLock<TypeMap>>,
-    pub queue: TrackQueue,
+    pub call: Arc<Mutex<Call>>,
     pub guild_id: GuildId,
 }
 
@@ -43,7 +44,9 @@ impl EventHandler for TrackEndHandler {
             .unwrap_or_default();
 
         if autopause {
-            self.queue.pause().ok();
+            let handler = self.call.lock().await;
+            let queue = handler.queue();
+            queue.pause().ok();
         }
 
         drop(data_rlock);
@@ -57,10 +60,11 @@ impl EventHandler for TrackEndHandler {
 impl EventHandler for ModifyQueueHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
         info!("Updating Queue song end...");
+        let handler = self.call.lock().await;
         update_queue_messages(
             &self.http,
             &self.ctx_data,
-            &self.queue.current_queue(),
+            &handler.queue().current_queue(),
             self.guild_id,
         )
         .await;
@@ -71,7 +75,7 @@ impl EventHandler for ModifyQueueHandler {
 pub async fn update_queue_messages(
     http: &Arc<Http>,
     ctx_data: &Arc<RwLock<TypeMap>>,
-    tracks: &[Queued],
+    tracks: &[TrackHandle],
     guild_id: GuildId,
 ) {
     let data = ctx_data.read().await;

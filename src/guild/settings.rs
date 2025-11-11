@@ -1,23 +1,15 @@
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serenity::{model::id::GuildId, prelude::TypeMapKey};
 use std::{
     collections::{HashMap, HashSet},
-    env,
     fs::{create_dir_all, OpenOptions},
     io::{BufReader, BufWriter},
     path::Path,
 };
 
-use crate::errors::ParrotError;
+use crate::{errors::ParrotError, SETTINGS_PATH};
 
-const DEFAULT_SETTINGS_PATH: &str = "data/settings";
 const DEFAULT_ALLOWED_DOMAINS: [&str; 2] = ["youtube.com", "youtu.be"];
-
-lazy_static! {
-    static ref SETTINGS_PATH: String =
-        env::var("SETTINGS_PATH").unwrap_or(DEFAULT_SETTINGS_PATH.to_string());
-}
 
 #[derive(Deserialize, Serialize)]
 pub struct GuildSettings {
@@ -60,6 +52,7 @@ impl GuildSettings {
 
     pub fn save(&self) -> Result<(), ParrotError> {
         create_dir_all(SETTINGS_PATH.as_str())?;
+
         let path = format!("{}/{}.json", SETTINGS_PATH.as_str(), self.guild_id);
 
         let file = OpenOptions::new()

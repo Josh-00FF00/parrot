@@ -6,15 +6,11 @@ use crate::{
     },
     connection::{check_voice_connections, Connection},
     errors::ParrotError,
+    global_settings::{GlobalSettings, GlobalSettingsMap},
     guild::settings::{GuildSettings, GuildSettingsMap},
-    handlers::track_end::update_queue_messages,
-    sources::{
-        librespot::{Respot, RESPOT},
-        spotify::{Spotify, SPOTIFY},
-    },
+    sources::librespot::{login, Respot, RESPOT},
     utils::create_response_text,
 };
-use tracing::error;
 use serenity::{
     all::{
         ActivityData, Command, CommandInteraction, CommandOptionType, CreateCommand,
@@ -25,6 +21,9 @@ use serenity::{
     model::{gateway::Ready, id::GuildId, prelude::VoiceState},
     prelude::Mentionable,
 };
+use tracing::{error, info};
+
+use super::track_end::update_queue_messages;
 
 pub struct SerenityHandler;
 
@@ -37,15 +36,34 @@ impl EventHandler for SerenityHandler {
         let activity = ActivityData::listening("/play");
         ctx.set_activity(Some(activity));
 
-        // attempts to authenticate to spotify
-        // *SPOTIFY.lock().await = Spotify::auth().await;
-        *RESPOT.lock() = Respot::auth("", "").await;
-
-        // creates the global application commands
-        self.create_commands(&ctx).await;
-
         // loads serialized guild settings
         self.load_guilds_settings(&ctx, &ready).await;
+        info!("Loading Settings!");
+        self.load_global_settings(&ctx).await;
+
+        // creates the global application commands
+        info!("Creating Commands");
+        for guild in ready.guilds.iter() {
+            info!("Creating commands for guild: {0}", guild.id);
+            self.create_commands(&ctx, guild.id).await;
+        }
+
+        let data = ctx.data.read().await;
+        let global = data.get::<GlobalSettingsMap>().unwrap();
+
+        info!("Got global: {:?}", global);
+        if let Some(settings) = &global.spotify {
+            info!("Found saved refresh token, reauthing...");
+            match Respot::reauth(&settings.spotify_refresh_token).await {
+                Ok(resp) => {
+                    *RESPOT.lock().await = Ok(resp);
+                    info!("Spotify reauth success!");
+                }
+                Err(e) => error!("Failed to auth spotify: {e:?}"),
+            }
+        }
+
+        info!("Load guild settings");
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
@@ -54,6 +72,7 @@ impl EventHandler for SerenityHandler {
         };
 
         if let Err(err) = self.run_command(&ctx, &mut command).await {
+            error!("Got serenity error: {err:?}");
             self.handle_error(&ctx, &mut command, err).await
         }
     }
@@ -80,7 +99,7 @@ impl EventHandler for SerenityHandler {
 }
 
 impl SerenityHandler {
-    async fn create_commands(&self, ctx: &Context) -> Vec<Command> {
+    async fn create_commands(&self, ctx: &Context, guild: GuildId) -> Vec<Command> {
         let x = vec![
             CreateCommand::new("autopause")
                 .description("Toggles whether to pause after a song ends"),
@@ -227,17 +246,44 @@ impl SerenityHandler {
             CreateCommand::new("summon").description("Summons the bot in your voice channel"),
             CreateCommand::new("version").description("Displays the current version"),
             CreateCommand::new("voteskip").description("Starts a vote to skip the current track"),
+            CreateCommand::new("login")
+                .description("Initiate flow to authorise spotify")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "redirect_url",
+                        "URL to redirect to for auth flow",
+                    )
+                    .required(true),
+                ),
         ];
-        Command::set_global_commands(&ctx.http, x)
+
+        guild
+            .set_commands(&ctx.http, x)
             .await
             .expect("Couldn't make commands")
     }
 
-    async fn load_guilds_settings(&self, ctx: &Context, ready: &Ready) {
-        println!("[INFO] Loading guilds' settings");
+    async fn load_global_settings(&self, ctx: &Context) {
         let mut data = ctx.data.write().await;
+
+        let settings = data.get_mut::<GlobalSettingsMap>().unwrap();
+
+        if let Err(err) = settings.load_if_exists() {
+            error!("Failed to load global settings due to {:?}", err);
+        } else {
+            info!(
+                "Successfully loaded the settings! {}",
+                GlobalSettings::path()
+            );
+        }
+    }
+    async fn load_guilds_settings(&self, ctx: &Context, ready: &Ready) {
+        info!("Loading guilds' settings");
+        let mut data = ctx.data.write().await;
+
         for guild in &ready.guilds {
-            println!("[DEBUG] Loading guild settings for {:?}", guild);
+            info!("Loading guild settings for {:?}", guild);
             let settings = data.get_mut::<GuildSettingsMap>().unwrap();
 
             let guild_settings = settings
@@ -245,7 +291,7 @@ impl SerenityHandler {
                 .or_insert_with(|| GuildSettings::new(guild.id));
 
             if let Err(err) = guild_settings.load_if_exists() {
-                println!(
+                error!(
                     "[ERROR] Failed to load guild {} settings due to {}",
                     guild.id, err
                 );
@@ -332,6 +378,7 @@ impl SerenityHandler {
             "summon" => summon(ctx, command, true).await,
             "version" => version(ctx, command).await,
             "voteskip" => voteskip(ctx, command).await,
+            "login" => login(ctx, command).await,
             _ => unreachable!(),
         }
     }
@@ -356,7 +403,7 @@ impl SerenityHandler {
         interaction: &mut CommandInteraction,
         err: ParrotError,
     ) {
-        error!("Error in serenity: {}", err);
+        error!("Error in serenity: {:?}", err);
         create_response_text(&ctx.http, interaction, &format!("{err}"))
             .await
             .expect("failed to create response");

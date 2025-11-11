@@ -2,7 +2,7 @@ use crate::messaging::messages::{
     FAIL_ANOTHER_CHANNEL, FAIL_AUTHOR_DISCONNECTED, FAIL_AUTHOR_NOT_FOUND,
     FAIL_NO_VOICE_CONNECTION, FAIL_WRONG_CHANNEL, NOTHING_IS_PLAYING, QUEUE_IS_EMPTY,
 };
-use crate::sources::librespot::RespotError;
+use crate::sources::librespot::{RespotError, SpotifyError};
 use rspotify::ClientError as RSpotifyClientError;
 use serenity::{model::mention::Mention, prelude::SerenityError};
 
@@ -14,6 +14,7 @@ use std::{error::Error, fmt};
 #[derive(Debug)]
 pub enum ParrotError {
     Other(&'static str),
+    OtherS(String),
     QueueEmpty,
     NotInRange(&'static str, isize, isize, isize),
     NotConnected,
@@ -29,6 +30,7 @@ pub enum ParrotError {
     Respot(RespotError),
     IO(std::io::Error),
     Serde(serde_json::Error),
+    Spotify(SpotifyError),
 }
 
 /// `ParrotError` implements the [`Debug`] and [`Display`] traits
@@ -42,6 +44,7 @@ impl Display for ParrotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Other(msg) => f.write_str(msg),
+            Self::OtherS(msg) => f.write_str(msg),
             Self::QueueEmpty => f.write_str(QUEUE_IS_EMPTY),
             Self::NotInRange(param, value, lower, upper) => f.write_str(&format!(
                 "`{param}` should be between {lower} and {upper} but was {value}"
@@ -63,6 +66,7 @@ impl Display for ParrotError {
             Self::IO(err) => f.write_str(&format!("{err}")),
             Self::Serde(err) => f.write_str(&format!("{err}")),
             Self::Respot(err) => f.write_str(&format!("{err}")),
+            Self::Spotify(err) => f.write_str(&format!("{err}")),
         }
     }
 }
@@ -120,6 +124,12 @@ impl From<SerenityError> for ParrotError {
 impl From<RSpotifyClientError> for ParrotError {
     fn from(err: RSpotifyClientError) -> ParrotError {
         ParrotError::RSpotify(err)
+    }
+}
+
+impl From<SpotifyError> for ParrotError {
+    fn from(err: SpotifyError) -> ParrotError {
+        ParrotError::Spotify(err)
     }
 }
 

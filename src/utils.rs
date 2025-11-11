@@ -1,5 +1,3 @@
-pub mod queue;
-
 use serenity::{
     all::{
         CommandInteraction, CreateEmbedAuthor, CreateEmbedFooter, CreateInteractionResponse,
@@ -10,12 +8,11 @@ use serenity::{
     model::channel::Message,
     Error,
 };
+use songbird::{input::AuxMetadata, tracks::TrackHandle};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::{errors::ParrotError, messaging::message::ParrotMessage};
-
-use self::queue::Queued;
 
 pub async fn create_response(
     http: &Arc<Http>,
@@ -94,27 +91,28 @@ pub async fn edit_embed_response(
         .map_err(Into::into)
 }
 
-pub async fn create_now_playing_embed(track: &Queued) -> CreateEmbed {
+pub async fn create_now_playing_embed(track: &TrackHandle) -> CreateEmbed {
     let embed = CreateEmbed::default()
         .author(CreateEmbedAuthor::new(
             ParrotMessage::NowPlaying.to_string(),
         ))
-        .title(track.1.title.clone().unwrap())
-        .url(track.1.source_url.clone().unwrap());
+        .title(track_to_meta(track).title.clone().unwrap());
+    // .url(track.1.source_url.clone().unwrap());
 
-    let embed = embed.thumbnail(track.1.thumbnail.clone().unwrap());
+    // let embed = embed.thumbnail(track.1.thumbnail.clone().unwrap());
 
+    let meta = track_to_meta(&track);
     let position = get_human_readable_timestamp(Some(track.get_info().await.unwrap().position));
-    let duration = get_human_readable_timestamp(track.1.duration);
+    let duration = get_human_readable_timestamp(meta.duration);
 
     let embed = embed.field("Progress", format!(">>> {} / {}", position, duration), true);
 
-    let embed = match &track.1.channel {
-        Some(channel) => embed.field("Channel", format!(">>> {}", channel), true),
+    let embed = match track_to_meta(&track).channel {
+        Some(ref channel) => embed.field("Channel", format!(">>> {}", channel), true),
         None => embed.field("Channel", ">>> N/A", true),
     };
 
-    let source_url = track.1.source_url.as_ref().unwrap();
+    let source_url = meta.source_url.as_ref().unwrap();
 
     let (footer_text, footer_icon_url) = get_footer_info(source_url);
     embed.footer(CreateEmbedFooter::new(footer_text).icon_url(footer_icon_url))
@@ -153,4 +151,8 @@ pub fn get_human_readable_timestamp(duration: Option<Duration>) -> String {
 
 pub fn compare_domains(domain: &str, subdomain: &str) -> bool {
     subdomain == domain || subdomain.ends_with(domain)
+}
+
+pub fn track_to_meta(track: &TrackHandle) -> Arc<AuxMetadata> {
+    track.data::<AuxMetadata>()
 }

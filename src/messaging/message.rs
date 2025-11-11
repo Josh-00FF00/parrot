@@ -32,6 +32,7 @@ pub enum ParrotMessage {
     Summon { mention: Mention },
     Version { current: String },
     VoteSkip { mention: Mention, missing: usize },
+    Login { url: String },
 }
 
 impl Display for ParrotMessage {
@@ -71,6 +72,7 @@ impl Display for ParrotMessage {
                 "{} [{}]({}/tag/v{})\n{}({}/latest)",
                 VERSION, current, RELEASES_LINK, current, VERSION_LATEST, RELEASES_LINK
             )),
+            Self::Login { url } => f.write_str(&format!("Please authorise spotify to play: {url}")),
         }
     }
 }
