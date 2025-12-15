@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use tracing::error;
+use tracing::{error, info};
 
 pub struct IdleHandler {
     pub http: Arc<Http>,
@@ -34,6 +34,7 @@ impl EventHandler for IdleHandler {
         }
 
         if self.count.fetch_add(1, Ordering::Relaxed) >= self.limit {
+            info!("Bot's idled too long, disconnect!");
             let guild_id = self.interaction.guild_id?;
             if let Err(e) = self.manager.remove(guild_id).await {
                 error!("Failed to disconnect from guild {guild_id} {e:?}");
