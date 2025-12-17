@@ -5,7 +5,9 @@ use crate::{
 };
 use serenity::{all::CommandInteraction, client::Context};
 use songbird::tracks::{LoopState, TrackHandle};
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn repeat(
     ctx: &Context,
     interaction: &mut CommandInteraction,

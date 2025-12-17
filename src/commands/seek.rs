@@ -7,8 +7,10 @@ use crate::{
     utils::create_response,
 };
 use serenity::{all::CommandInteraction, client::Context};
+use tracing::instrument;
 use std::time::Duration;
 
+#[instrument(level = "info", skip_all)]
 pub async fn seek(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let args = interaction.data.options.clone();
     let seek_time = &args.first().unwrap().value;

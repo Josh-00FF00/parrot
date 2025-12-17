@@ -6,8 +6,10 @@ use crate::{
 };
 use serenity::{all::CommandInteraction, builder::CreateEmbed, client::Context};
 use songbird::tracks::TrackHandle;
+use tracing::instrument;
 use std::cmp::min;
 
+#[instrument(level = "info", skip_all)]
 pub async fn remove(
     ctx: &Context,
     interaction: &mut CommandInteraction,

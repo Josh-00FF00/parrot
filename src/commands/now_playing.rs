@@ -3,7 +3,9 @@ use crate::{
     utils::{create_embed_response, create_now_playing_embed},
 };
 use serenity::{all::CommandInteraction, client::Context};
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn now_playing(
     ctx: &Context,
     interaction: &mut CommandInteraction,

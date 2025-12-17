@@ -12,8 +12,9 @@ use serenity::{
 };
 use songbird::{Event, TrackEvent};
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
+#[instrument(level = "info", skip_all)]
 pub async fn summon(
     ctx: &Context,
     interaction: &mut CommandInteraction,
@@ -28,6 +29,7 @@ pub async fn summon(
     let channel_id = channel_opt.unwrap();
 
     if let Some(call) = manager.get(guild_id) {
+        // We're already in a call somewhere
         let handler = call.lock().await;
         let has_current_connection = handler.current_connection().is_some();
 
@@ -36,6 +38,7 @@ pub async fn summon(
             let bot_channel_id: ChannelId = handler.current_channel().unwrap().0.into();
             return Err(ParrotError::AlreadyConnected(bot_channel_id.mention()));
         }
+        return Ok(());
     }
 
     info!("Joining channel! {guild_id},{channel_id}");

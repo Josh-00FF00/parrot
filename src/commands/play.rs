@@ -29,7 +29,7 @@ use songbird::{
 };
 use songbird::{input::YoutubeDl, tracks::TrackQueue};
 use std::{cmp::Ordering, error::Error as StdError, sync::Arc, time::Duration};
-use tracing::info;
+use tracing::{info, instrument};
 use url::Url;
 
 #[derive(Clone, Copy)]
@@ -51,6 +51,7 @@ pub enum QueryType {
     SpotifyUri(SpotifyUri),
 }
 
+#[instrument(level = "info", skip_all)]
 pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let args = interaction.data.options.clone();
     let first_arg = args.first().unwrap();

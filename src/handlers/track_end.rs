@@ -60,8 +60,9 @@ impl EventHandler for TrackEndHandler {
 #[async_trait]
 impl EventHandler for ModifyQueueHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
+        info!("Trying to update queue messages");
         if let Some(call) = self.manager.get(self.guild_id) {
-            info!("Updating Queue song end...");
+            info!("Updating Queue song end");
             let handler = call.lock().await;
             update_queue_messages(
                 &self.http,

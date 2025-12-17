@@ -8,9 +8,9 @@ use std::{
     time::Duration,
 };
 
-use base64::{engine::general_purpose, Engine};
+use base64::{Engine, engine::general_purpose};
 use librespot::{
-    core::{authentication::Credentials, config::SessionConfig, session::Session, SpotifyUri},
+    core::{SpotifyUri, authentication::Credentials, config::SessionConfig, session::Session},
     metadata::Track,
     playback::{audio_backend::SinkError, config::PlayerConfig, decoder::AudioPacket, local_file},
 };
@@ -29,7 +29,7 @@ use symphonia::core::io::MediaSource;
 use tiny_http::{Server, SslConfig};
 use tokio::sync::Mutex as TMutex;
 use tokio::{runtime::Handle, sync::oneshot};
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 use url::Url;
 use zerocopy::IntoBytes;
 
@@ -409,6 +409,7 @@ struct ReAuthResponse {
     access_token: String,
 }
 
+#[instrument(level = "info", skip_all)]
 pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let (client_id, client_secret) = match (
         env::var("SPOTIFY_CLIENT_ID"),

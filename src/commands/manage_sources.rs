@@ -16,7 +16,9 @@ use serenity::{
     collector::ModalInteractionCollector,
     futures::StreamExt,
 };
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn allow(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
 

@@ -4,11 +4,11 @@ use crate::{
         queue::*, remove::*, repeat::*, resume::*, seek::*, shuffle::*, skip::*, stop::*,
         summon::*, version::*, voteskip::*,
     },
-    connection::{check_voice_connections, Connection},
+    connection::{Connection, check_voice_connections},
     errors::ParrotError,
     global_settings::{GlobalSettings, GlobalSettingsMap},
     guild::settings::{GuildSettings, GuildSettingsMap},
-    sources::librespot::{login, Respot, RESPOT},
+    sources::librespot::{RESPOT, Respot, login},
     utils::create_response_text,
 };
 use serenity::{
@@ -21,7 +21,7 @@ use serenity::{
     model::{gateway::Ready, id::GuildId, prelude::VoiceState},
     prelude::Mentionable,
 };
-use tracing::{error, info};
+use tracing::{Instrument, error, info, info_span};
 
 use super::track_end::update_queue_messages;
 
@@ -304,7 +304,7 @@ impl SerenityHandler {
         ctx: &Context,
         command: &mut CommandInteraction,
     ) -> Result<(), ParrotError> {
-        let command_name = command.data.name.as_str();
+        let command_name = command.data.name.clone();
         let guild_id = command.guild_id.unwrap();
 
         // get songbird voice client
@@ -324,7 +324,7 @@ impl SerenityHandler {
         {
             let guild = ctx.cache.guild(guild_id).unwrap();
 
-            match command_name {
+            match command_name.as_str() {
                 "autopause" | "clear" | "leave" | "pause" | "remove" | "repeat" | "resume"
                 | "seek" | "shuffle" | "skip" | "stop" | "voteskip" => {
                     match check_voice_connections(&guild, &user_id, &bot_id) {
@@ -359,28 +359,35 @@ impl SerenityHandler {
                 _ => Ok(()),
             }?;
         }
-        match command_name {
-            "autopause" => autopause(ctx, command).await,
-            "clear" => clear(ctx, command).await,
-            "leave" => leave(ctx, command).await,
-            "managesources" => allow(ctx, command).await,
-            "np" => now_playing(ctx, command).await,
-            "pause" => pause(ctx, command).await,
-            "play" | "superplay" => play(ctx, command).await,
-            "queue" => queue(ctx, command).await,
-            "remove" => remove(ctx, command).await,
-            "repeat" => repeat(ctx, command).await,
-            "resume" => resume(ctx, command).await,
-            "seek" => seek(ctx, command).await,
-            "shuffle" => shuffle(ctx, command).await,
-            "skip" => skip(ctx, command).await,
-            "stop" => stop(ctx, command).await,
-            "summon" => summon(ctx, command, true).await,
-            "version" => version(ctx, command).await,
-            "voteskip" => voteskip(ctx, command).await,
-            "login" => login(ctx, command).await,
-            _ => unreachable!(),
+        info!("Running command: {command_name}");
+        async move {
+            let res = match command_name.as_str() {
+                "autopause" => autopause(ctx, command).await,
+                "clear" => clear(ctx, command).await,
+                "leave" => leave(ctx, command).await,
+                "managesources" => allow(ctx, command).await,
+                "np" => now_playing(ctx, command).await,
+                "pause" => pause(ctx, command).await,
+                "play" | "superplay" => play(ctx, command).await,
+                "queue" => queue(ctx, command).await,
+                "remove" => remove(ctx, command).await,
+                "repeat" => repeat(ctx, command).await,
+                "resume" => resume(ctx, command).await,
+                "seek" => seek(ctx, command).await,
+                "shuffle" => shuffle(ctx, command).await,
+                "skip" => skip(ctx, command).await,
+                "stop" => stop(ctx, command).await,
+                "summon" => summon(ctx, command, true).await,
+                "version" => version(ctx, command).await,
+                "voteskip" => voteskip(ctx, command).await,
+                "login" => login(ctx, command).await,
+                _ => unreachable!(),
+            };
+            info!("Finished Command {}", &command_name);
+            res
         }
+        .instrument(info_span!("Running Command"))
+        .await
     }
 
     async fn self_deafen(&self, ctx: &Context, guild: Option<GuildId>, new: VoiceState) {

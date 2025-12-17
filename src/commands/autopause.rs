@@ -5,7 +5,9 @@ use crate::{
     utils::create_response,
 };
 use serenity::{all::CommandInteraction, client::Context};
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn autopause(
     ctx: &Context,
     interaction: &mut CommandInteraction,

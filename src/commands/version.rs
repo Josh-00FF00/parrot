@@ -1,6 +1,8 @@
 use crate::{errors::ParrotError, messaging::message::ParrotMessage, utils::create_response};
 use serenity::{all::CommandInteraction, client::Context};
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn version(
     ctx: &Context,
     interaction: &mut CommandInteraction,

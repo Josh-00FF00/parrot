@@ -1,6 +1,8 @@
 use crate::{errors::ParrotError, messaging::message::ParrotMessage, utils::create_response};
 use serenity::{all::CommandInteraction, client::Context};
+use tracing::instrument;
 
+#[instrument(level = "info", skip_all)]
 pub async fn leave(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
     let manager = songbird::get(ctx).await.unwrap();

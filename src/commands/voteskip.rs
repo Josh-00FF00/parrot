@@ -1,7 +1,7 @@
 use crate::{
     commands::skip::{create_skip_response, force_skip_top_track},
     connection::get_voice_channel_for_user,
-    errors::{verify, ParrotError},
+    errors::{ParrotError, verify},
     guild::cache::GuildCacheMap,
     messaging::message::ParrotMessage,
     utils::create_response,
@@ -11,8 +11,10 @@ use serenity::{
     client::Context,
     prelude::{Mentionable, RwLock, TypeMap},
 };
+use tracing::instrument;
 use std::{collections::HashSet, sync::Arc};
 
+#[instrument(level = "info", skip_all)]
 pub async fn voteskip(
     ctx: &Context,
     interaction: &mut CommandInteraction,
@@ -44,7 +46,7 @@ pub async fn voteskip(
 
     if cache.current_skip_votes.len() >= skip_threshold {
         force_skip_top_track(&queue).await?;
-        create_skip_response(ctx, interaction, 1).await
+        create_skip_response(ctx, interaction, &queue, 1).await
     } else {
         create_response(
             &ctx.http,

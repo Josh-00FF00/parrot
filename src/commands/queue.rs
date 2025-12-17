@@ -27,17 +27,18 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tracing::info;
+use tracing::{Instrument, error, info, info_span, instrument};
 
 const EMBED_PAGE_SIZE: usize = 6;
 const EMBED_TIMEOUT: u64 = 3600;
 
+#[instrument(level = "info", skip_all)]
 pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
     let guild_id = interaction.guild_id.unwrap();
     let manager = songbird::get(ctx).await.unwrap();
     let call = manager.get(guild_id).unwrap();
 
-    let handler = call.lock().await;
+    let mut handler = call.lock().await;
     let queue = handler.queue();
 
     info!("Making interaction response");
@@ -68,7 +69,7 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
     drop(data);
 
     // refresh the queue interaction whenever a track ends
-    call.lock().await.add_global_event(
+    handler.add_global_event(
         Event::Track(TrackEvent::End),
         ModifyQueueHandler {
             http: ctx.http.clone(),
@@ -83,50 +84,65 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
         .timeout(Duration::from_secs(EMBED_TIMEOUT))
         .stream();
 
-    while let Some(mci) = cib.next().await {
-        let btn_id = &mci.data.custom_id;
+    let interaction_c = interaction.clone();
+    let ctx_c = ctx.clone();
+    info!("Launching monitor thread!");
+    tokio::spawn(
+        async move {
+            info!("Spawning");
+            while let Some(mci) = cib.next().await {
+                let btn_id = &mci.data.custom_id;
+                info!("Queue interaction: {:?}", mci);
 
-        // refetch the queue in case it changed
-        let manager = songbird::get(ctx).await.unwrap();
-        let call = manager.get(guild_id).unwrap();
-        let handler = call.lock().await;
-        let queue = handler.queue();
+                // refetch the queue in case it changed
+                let manager = songbird::get(&ctx_c).await.unwrap();
+                let call = manager.get(guild_id).unwrap();
+                let handler = call.lock().await;
+                let queue = handler.queue();
 
-        let num_pages = calculate_num_pages(&queue.current_queue());
-        let mut page_wlock = page.write().await;
+                let num_pages = calculate_num_pages(&queue.current_queue());
+                let mut page_wlock = page.write().await;
 
-        *page_wlock = match btn_id.as_str() {
-            "<<" => 0,
-            "<" => min(page_wlock.saturating_sub(1), num_pages - 1),
-            ">" => min(page_wlock.add(1), num_pages - 1),
-            ">>" => num_pages - 1,
-            _ => continue,
-        };
+                *page_wlock = match btn_id.as_str() {
+                    "<<" => 0,
+                    "<" => min(page_wlock.saturating_sub(1), num_pages - 1),
+                    ">" => min(page_wlock.add(1), num_pages - 1),
+                    ">>" => num_pages - 1,
+                    _ => continue,
+                };
 
-        interaction
-            .create_response(
-                &ctx.http,
-                CreateInteractionResponse::UpdateMessage(
-                    CreateInteractionResponseMessage::new()
-                        .add_embed(create_queue_embed(&queue.current_queue(), *page_wlock))
-                        .components(build_nav_btns(*page_wlock, num_pages)),
-                ),
-            )
-            .await?;
-    }
+                if let Err(e) = interaction_c
+                    .create_response(
+                        &ctx_c.http,
+                        CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .add_embed(create_queue_embed(&queue.current_queue(), *page_wlock))
+                                .components(build_nav_btns(*page_wlock, num_pages)),
+                        ),
+                    )
+                    .await
+                {
+                    error!("Failed to update queue list {e:?}");
+                    break;
+                }
+            }
 
-    message
-        .edit(
-            &ctx.http,
-            EditMessage::new().add_embed(CreateEmbed::new().description(QUEUE_EXPIRED)),
-        )
-        .await
-        .unwrap();
+            info!("Exiting");
 
-    forget_queue_message(&ctx.data, &mut message, guild_id)
-        .await
-        .ok();
+            message
+                .edit(
+                    &ctx_c.http,
+                    EditMessage::new().add_embed(CreateEmbed::new().description(QUEUE_EXPIRED)),
+                )
+                .await
+                .unwrap();
 
+            forget_queue_message(&ctx_c.data, &mut message, guild_id)
+                .await
+                .ok();
+        }
+        .instrument(info_span!("QueueThread")),
+    );
     Ok(())
 }
 
