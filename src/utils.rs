@@ -1,4 +1,5 @@
 use serenity::{
+    Error,
     all::{
         CommandInteraction, CreateEmbedAuthor, CreateEmbedFooter, CreateInteractionResponse,
         CreateInteractionResponseMessage, EditInteractionResponse,
@@ -6,7 +7,6 @@ use serenity::{
     builder::CreateEmbed,
     http::{Http, HttpError},
     model::channel::Message,
-    Error,
 };
 use songbird::{input::AuxMetadata, tracks::TrackHandle};
 use std::{sync::Arc, time::Duration};
@@ -92,19 +92,23 @@ pub async fn edit_embed_response(
 }
 
 pub async fn create_now_playing_embed(track: &TrackHandle) -> CreateEmbed {
-    let embed = CreateEmbed::default()
+    let meta = track_to_meta(track);
+    let mut embed = CreateEmbed::default()
         .author(CreateEmbedAuthor::new(
             ParrotMessage::NowPlaying.to_string(),
         ))
-        .title(track_to_meta(track).title.clone().unwrap());
+        .title(meta.title.clone().unwrap_or("No Title".to_string()));
 
-    let meta = track_to_meta(&track);
+    if let Some(url) = &meta.source_url {
+        embed = embed.url(url);
+    }
+
     let position = get_human_readable_timestamp(Some(track.get_info().await.unwrap().position));
     let duration = get_human_readable_timestamp(meta.duration);
 
     let embed = embed.field("Progress", format!(">>> {} / {}", position, duration), true);
 
-    let embed = match track_to_meta(&track).channel {
+    let embed = match meta.channel {
         Some(ref channel) => embed.field("Channel", format!(">>> {}", channel), true),
         None => embed.field("Channel", ">>> N/A", true),
     };
