@@ -1,8 +1,8 @@
 use serenity::{all::CommandInteraction, async_trait, http::Http};
-use songbird::{tracks::PlayMode, Event, EventContext, EventHandler, Songbird};
+use songbird::{Event, EventContext, EventHandler, Songbird, tracks::PlayMode};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use tracing::{error, info};
 
@@ -36,8 +36,11 @@ impl EventHandler for IdleHandler {
         if self.count.fetch_add(1, Ordering::Relaxed) >= self.limit {
             info!("Bot's idled too long, disconnect!");
             let guild_id = self.interaction.guild_id?;
+
             if let Err(e) = self.manager.remove(guild_id).await {
                 error!("Failed to disconnect from guild {guild_id} {e:?}");
+            } else {
+                info!("Disconnected from guild due to idle {guild_id}");
             }
         }
 

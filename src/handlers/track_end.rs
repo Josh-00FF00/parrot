@@ -5,8 +5,8 @@ use serenity::{
     model::id::GuildId,
     prelude::{RwLock, TypeMap},
 };
-use songbird::tracks::TrackHandle;
 use songbird::{Call, Event, EventContext, EventHandler};
+use songbird::{Driver, Songbird, tracks::TrackHandle};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -21,14 +21,14 @@ use crate::{
 
 pub struct TrackEndHandler {
     pub guild_id: GuildId,
-    pub call: Arc<Mutex<Call>>,
+    pub manager: Arc<Songbird>,
     pub ctx_data: Arc<RwLock<TypeMap>>,
 }
 
 pub struct ModifyQueueHandler {
     pub http: Arc<Http>,
     pub ctx_data: Arc<RwLock<TypeMap>>,
-    pub call: Arc<Mutex<Call>>,
+    pub manager: Arc<Songbird>,
     pub guild_id: GuildId,
 }
 
@@ -43,8 +43,10 @@ impl EventHandler for TrackEndHandler {
             .map(|guild_settings| guild_settings.autopause)
             .unwrap_or_default();
 
-        if autopause {
-            let handler = self.call.lock().await;
+        if let Some(call) = self.manager.get(self.guild_id)
+            && autopause
+        {
+            let handler = call.lock().await;
             let queue = handler.queue();
             queue.pause().ok();
         }
@@ -59,15 +61,19 @@ impl EventHandler for TrackEndHandler {
 #[async_trait]
 impl EventHandler for ModifyQueueHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        info!("Updating Queue song end...");
-        let handler = self.call.lock().await;
-        update_queue_messages(
-            &self.http,
-            &self.ctx_data,
-            &handler.queue().current_queue(),
-            self.guild_id,
-        )
-        .await;
+        if let Some(call) = self.manager.get(self.guild_id) {
+            info!("Updating Queue song end...");
+            let handler = call.lock().await;
+            update_queue_messages(
+                &self.http,
+                &self.ctx_data,
+                &handler.queue().current_queue(),
+                self.guild_id,
+            )
+            .await;
+        } else {
+            info!("Cannot update queue, not in a call!");
+        }
         None
     }
 }

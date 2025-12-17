@@ -11,7 +11,7 @@ use serenity::{
     prelude::Mentionable,
 };
 use songbird::{Event, TrackEvent};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tracing::{error, info};
 
 pub async fn summon(
@@ -47,14 +47,13 @@ pub async fn summon(
     // unregister existing events and register idle notifier
     if let Some(call) = manager.get(guild_id) {
         let mut handler = call.lock().await;
-
         handler.remove_all_global_events();
 
         handler.add_global_event(
             Event::Periodic(Duration::from_secs(1), None),
             IdleHandler {
                 http: ctx.http.clone(),
-                manager,
+                manager: manager.clone(),
                 interaction: interaction.clone(),
                 limit: 60 * 5, // 5 mins
                 count: Default::default(),
@@ -65,7 +64,7 @@ pub async fn summon(
             Event::Track(TrackEvent::End),
             TrackEndHandler {
                 guild_id,
-                call: call.clone(),
+                manager,
                 ctx_data: ctx.data.clone(),
             },
         );
