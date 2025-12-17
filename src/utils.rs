@@ -97,9 +97,6 @@ pub async fn create_now_playing_embed(track: &TrackHandle) -> CreateEmbed {
             ParrotMessage::NowPlaying.to_string(),
         ))
         .title(track_to_meta(track).title.clone().unwrap());
-    // .url(track.1.source_url.clone().unwrap());
-
-    // let embed = embed.thumbnail(track.1.thumbnail.clone().unwrap());
 
     let meta = track_to_meta(&track);
     let position = get_human_readable_timestamp(Some(track.get_info().await.unwrap().position));
