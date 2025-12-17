@@ -38,7 +38,7 @@
         
         postInstall = ''
           wrapProgram $out/bin/parrot \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg-full pkgs.yt-dlp ]}
         '';
       });
 

@@ -1,6 +1,6 @@
 use crate::{
     commands::{skip::force_skip_top_track, summon::summon},
-    errors::{verify, ParrotError},
+    errors::{ParrotError, verify},
     guild::settings::{GuildSettings, GuildSettingsMap},
     handlers::track_end::update_queue_messages,
     messaging::{
@@ -191,10 +191,10 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                     update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
                 }
                 SpotifyUri::Album { id: _ } => {
-                    return Err(ParrotError::Spotify(SpotifyError::Todo))
+                    return Err(ParrotError::Spotify(SpotifyError::Todo));
                 }
                 SpotifyUri::Playlist { user: _, id: _ } => {
-                    return Err(ParrotError::Spotify(SpotifyError::Todo))
+                    return Err(ParrotError::Spotify(SpotifyError::Todo));
                 }
                 _ => return Err(ParrotError::Spotify(SpotifyError::Todo)),
             },
@@ -321,13 +321,19 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                 .unwrap();
 
             match (query_type, mode) {
-                (QueryType::VideoLink(_) | QueryType::Keywords(_), Mode::Next) => {
+                (
+                    QueryType::SpotifyUri(_) | QueryType::VideoLink(_) | QueryType::Keywords(_),
+                    Mode::Next,
+                ) => {
                     let track = queue.current_queue().get(1).cloned().unwrap();
                     let embed = create_queued_embed(PLAY_TOP, &track, estimated_time).await;
 
                     edit_embed_response(&ctx.http, interaction, embed).await?;
                 }
-                (QueryType::VideoLink(_) | QueryType::Keywords(_), Mode::End) => {
+                (
+                    QueryType::SpotifyUri(_) | QueryType::VideoLink(_) | QueryType::Keywords(_),
+                    Mode::End,
+                ) => {
                     let track = queue.current_queue().last().cloned().unwrap();
                     let embed = create_queued_embed(PLAY_QUEUE, &track, estimated_time).await;
 

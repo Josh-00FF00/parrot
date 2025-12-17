@@ -11,7 +11,7 @@ use serenity::{
     prelude::Mentionable,
 };
 use songbird::{Event, TrackEvent};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tracing::{error, info};
 
 pub async fn summon(

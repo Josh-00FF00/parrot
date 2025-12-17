@@ -17,10 +17,7 @@ pub async fn shuffle(
     let queue = handler.queue();
     queue.modify_queue(|queue| {
         // skip the first track on queue because it's being played
-        fisher_yates(
-            queue.make_contiguous()[1..].as_mut(),
-            &mut rand::thread_rng(),
-        )
+        fisher_yates(queue.make_contiguous()[1..].as_mut(), &mut rand::rng())
     });
 
     create_response(&ctx.http, interaction, ParrotMessage::Shuffle).await?;
@@ -35,6 +32,6 @@ where
     let mut index = values.len();
     while index >= 2 {
         index -= 1;
-        values.swap(index, rng.gen_range(0..(index + 1)));
+        values.swap(index, rng.random_range(0..(index + 1)));
     }
 }
