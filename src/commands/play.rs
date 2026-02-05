@@ -12,12 +12,11 @@ use crate::{
         youtube::YouTube,
     },
     utils::{
-        compare_domains, create_now_playing_embed, create_response, edit_embed_response,
+        self, compare_domains, create_now_playing_embed, create_response, edit_embed_response,
         edit_response, get_human_readable_timestamp, track_to_meta,
     },
 };
 use librespot::core::SpotifyUri;
-use reqwest::Client as HttpClient;
 use serenity::{
     all::{CommandInteraction, CreateEmbedFooter},
     builder::CreateEmbed,
@@ -431,7 +430,9 @@ async fn create_queued_embed(
 }
 
 async fn get_track_source(query_type: QueryType) -> Input {
-    let client = HttpClient::new();
+    // Fine to clone since the client uses an Arc internally
+    let client = utils::get_reqwest_client().clone();
+
     match query_type {
         QueryType::VideoLink(query) => YoutubeDl::new(client, query).into(),
         QueryType::Keywords(search) => YoutubeDl::new_search(client, search).into(),

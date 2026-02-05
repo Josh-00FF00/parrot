@@ -1,3 +1,4 @@
+use reqwest::cookie::Jar;
 use serenity::{
     Error,
     all::{
@@ -9,10 +10,28 @@ use serenity::{
     model::channel::Message,
 };
 use songbird::{input::AuxMetadata, tracks::TrackHandle};
-use std::{sync::Arc, time::Duration};
+use std::{
+    fs::File,
+    io::{self, BufReader},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
+use std::{io::BufRead, sync::OnceLock};
+use tracing::error;
 use url::Url;
 
 use crate::{errors::ParrotError, messaging::message::ParrotMessage};
+
+pub static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub fn get_reqwest_client() -> &'static reqwest::Client {
+    REQWEST_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .build()
+            .expect("Failed to build global client")
+    })
+}
 
 pub async fn create_response(
     http: &Arc<Http>,
@@ -156,4 +175,66 @@ pub fn compare_domains(domain: &str, subdomain: &str) -> bool {
 
 pub fn track_to_meta(track: &TrackHandle) -> Arc<AuxMetadata> {
     track.data::<AuxMetadata>()
+}
+
+pub fn load_cookie_jar_from_path(path: &Path) -> io::Result<Arc<Jar>> {
+    let jar = Arc::new(Jar::default());
+
+    let reader = BufReader::new(File::open(path)?);
+
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            // Skip comments (often header info) and empty lines
+            continue;
+        }
+
+        // Attempt to parse and add the cookie
+        if let Err(e) = add_netscape_cookie(&jar, trimmed) {
+            error!("Skipping invalid line: '{}'. Error: {:?}", trimmed, e);
+        }
+    }
+
+    Ok(jar)
+}
+
+fn add_netscape_cookie(jar: &Arc<Jar>, line: &str) -> Result<(), String> {
+    let parts: Vec<&str> = line.split('\t').collect();
+
+    // Netscape format standard usually requires 7 columns
+    if parts.len() < 7 {
+        return Err("Line has fewer than 7 columns".to_string());
+    }
+
+    let domain = parts[0];
+    let path = parts[2];
+    let secure = parts[3];
+    let _expiration = parts[4]; // Ignoring expiration for session-based scraping
+    let name = parts[5];
+    let value = parts[6];
+
+    // Build the cookie string: "Name=Value; Domain=...; Path=..."
+    let mut cookie_str = format!("{}={}; Domain={}; Path={}", name, value, domain, path);
+
+    if secure == "TRUE" {
+        cookie_str.push_str("; Secure");
+    }
+
+    // Determine the URL for the jar to associate the cookie with
+    // We remove the leading '.' (e.g., .youtube.com -> youtube.com)
+    let clean_domain = domain.trim_start_matches('.');
+
+    let scheme = if secure == "TRUE" { "https" } else { "http" };
+
+    let url_str = format!("{}://{}", scheme, clean_domain);
+
+    let url = url_str
+        .parse::<Url>()
+        .map_err(|_| format!("Could not parse URL from domain: {}", clean_domain))?;
+
+    jar.add_cookie_str(&cookie_str, &url);
+
+    Ok(())
 }
