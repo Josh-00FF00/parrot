@@ -274,7 +274,7 @@ impl Compose for RespotTrack {
             2,
         ));
 
-        Ok(AudioStream { input, hint: None })
+        Ok(AudioStream { input })
     }
 
     fn should_create_async(&self) -> bool {
@@ -309,7 +309,7 @@ impl Compose for RespotTrack {
             sample_rate: None,
             source_url: Some(format!(
                 "https://open.spotify.com/track/{}",
-                self.track.to_id().expect("Missing ID")
+                self.track.to_id()
             )),
             title: Some(track.name),
             thumbnail: None,

@@ -4,13 +4,13 @@ use parrot::{
 };
 use std::{error::Error, path::Path};
 use tracing::{error, info};
-use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
     match std::env::var("CREDENTIALS_DIRECTORY") {
@@ -21,12 +21,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             info!("Loading ytdlp cookies");
 
-            let mut builder = reqwest::Client::builder();
+            let builder = reqwest::Client::builder();
             let cookies = Path::new(&cred_dir).join("cookies.txt");
 
-            if let Ok(jar) = load_cookie_jar_from_path(&cookies) {
+            if let Ok(_jar) = load_cookie_jar_from_path(&cookies) {
                 info!("Successfully loaded cookies into cookie jar");
-                builder = builder.cookie_provider(jar);
+                // builder = builder.cookie_provider(jar);
             }
 
             let client = builder.build().expect("Failed to build reqwest client");
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Err(_) => {
             info!("Loading default env");
-            dotenv::dotenv().expect("Failed to load default dotenv");
+            let _ = dotenv::dotenv();
         }
     }
 
