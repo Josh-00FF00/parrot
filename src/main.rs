@@ -13,6 +13,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
+    let ip = reqwest::get("https://ifconfig.me/ip").await?.text().await?;
+    println!("My IP address is: {}", ip);
+
     match std::env::var("CREDENTIALS_DIRECTORY") {
         Ok(cred_dir) => {
             info!("Loading creds from: {cred_dir}");
