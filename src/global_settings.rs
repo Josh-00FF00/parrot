@@ -73,6 +73,16 @@ impl GlobalSettings {
             spotify_access_token: access_token.to_string(),
         });
     }
+
+    pub fn update_refresh_token(&mut self, refresh_token: &str) {
+        let access_token = self
+            .spotify
+            .as_ref()
+            .map(|settings| settings.spotify_access_token.clone())
+            .unwrap_or_default();
+
+        self.set_tokens(refresh_token, &access_token);
+    }
 }
 
 #[derive(Debug)]

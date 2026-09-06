@@ -24,8 +24,10 @@ Additional optional environment variables:
 - `STATE_DIRECTORY`: directory where guild settings and Spotify tokens are persisted (defaults to `data/settings`).
 - `CREDENTIALS_DIRECTORY`: when set, loads `app.env` (containing the variables above) and `cookies.txt` (Netscape-format cookies passed to yt-dlp) from the given directory.
 - `SPOTIFY_ADMIN_IDS`: comma-separated Discord user IDs allowed to run `/login`; when unset, anyone can initiate the Spotify login flow.
+- `SPOTIFY_DEVICE_ID`: stable device id presented to Spotify on every (re)connect. Keeps the bot looking like one consistent player instead of a new device per reauth, which helps avoid Spotify force-signing-out all sessions on the account.
+- `SPOTIFY_SESSION_CLIENT_ID`: overrides the client id the streaming session presents to Spotify. Defaults to `SPOTIFY_CLIENT_ID` so the session identity matches the OAuth app.
 
-Spotify playback requires a one-time `/login` command in Discord to authorise the bot with your Spotify account.
+Spotify playback requires a one-time `/login` command in Discord to authorise the bot with your Spotify account. After that, tokens are refreshed automatically (including Spotify's rotated refresh tokens) and `/login` should never be needed again.
 
 ### Permissions
 

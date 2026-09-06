@@ -54,7 +54,7 @@ impl EventHandler for SerenityHandler {
         info!("Got global: {:?}", global);
         if let Some(settings) = &global.spotify {
             info!("Found saved refresh token, reauthing...");
-            set_refresh_token(&settings.spotify_refresh_token);
+            set_refresh_token(&settings.spotify_refresh_token).await;
 
             match refresh_session().await {
                 Ok(_) => info!("Spotify reauth success!"),

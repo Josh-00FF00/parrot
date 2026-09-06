@@ -4,7 +4,7 @@ use std::{
     env,
     io::{self, Read, Seek, Write},
     str::FromStr,
-    sync::{Arc, LazyLock, OnceLock},
+    sync::{Arc, LazyLock},
     thread,
     time::Duration,
 };
@@ -40,7 +40,7 @@ use thiserror::Error;
 use crate::{
     commands::play::QueryType,
     errors::ParrotError,
-    global_settings::GlobalSettingsMap,
+    global_settings::{GlobalSettings, GlobalSettingsMap},
     messaging::message::ParrotMessage,
     utils::{create_response, create_response_text},
 };
@@ -72,23 +72,55 @@ pub static SPOTIFY_QUERY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 pub static RESPOT: LazyLock<TMutex<Result<Respot, ParrotError>>> =
     LazyLock::new(|| TMutex::new(Err(ParrotError::Other("no auth respot attempts"))));
 
-static REFRESH_TOKEN: OnceLock<String> = OnceLock::new();
+const DEFAULT_SPOTIFY_DEVICE_ID: &str = "6f3a1e2b-9c4d-4e8f-a1b2-3c5d7e9f0a1b";
 
-pub fn set_refresh_token(token: &str) {
-    let _ = REFRESH_TOKEN.set(token.to_string());
+static REFRESH_TOKEN: TMutex<Option<String>> = TMutex::const_new(None);
+
+pub async fn set_refresh_token(token: &str) {
+    *REFRESH_TOKEN.lock().await = Some(token.to_string());
 }
 
 pub async fn refresh_session() -> Result<Session, ParrotError> {
     let refresh_token = REFRESH_TOKEN
-        .get()
+        .lock()
+        .await
+        .clone()
         .ok_or(ParrotError::Spotify(SpotifyError::AuthMissing))?;
 
-    let respot = Respot::reauth(refresh_token).await?;
+    let (respot, rotated_refresh_token) = Respot::reauth(&refresh_token).await?;
+
+    if let Some(new_refresh_token) = rotated_refresh_token {
+        info!("Spotify rotated the refresh token, saving it");
+        set_refresh_token(&new_refresh_token).await;
+        persist_refresh_token(&new_refresh_token);
+    }
+
     let session = respot.get_session();
 
-    *RESPOT.lock().await = Ok(respot);
+    {
+        let mut l = RESPOT.lock().await;
+        if let Ok(old) = l.as_ref() {
+            old.get_session().shutdown();
+        }
+        *l = Ok(respot);
+    }
 
     Ok(session)
+}
+
+fn persist_refresh_token(refresh_token: &str) {
+    let mut settings = GlobalSettings::default();
+
+    if let Err(err) = settings.load_if_exists() {
+        error!("Failed to load global settings: {err:?}");
+        return;
+    }
+
+    settings.update_refresh_token(refresh_token);
+
+    if let Err(err) = settings.save() {
+        error!("Failed to save rotated refresh token: {err:?}");
+    }
 }
 
 async fn respot_session() -> Result<Session, ParrotError> {
@@ -148,10 +180,25 @@ impl Respot {
 
 impl Respot {
     pub async fn auth(access_token: &str) -> Result<Self, ParrotError> {
-        let session_config = SessionConfig::default();
+        let device_id =
+            env::var("SPOTIFY_DEVICE_ID").unwrap_or_else(|_| DEFAULT_SPOTIFY_DEVICE_ID.to_string());
+
+        let client_id = env::var("SPOTIFY_SESSION_CLIENT_ID")
+            .or_else(|_| env::var("SPOTIFY_CLIENT_ID"))
+            .unwrap_or_else(|_| SessionConfig::default().client_id);
+
+        let session_config = SessionConfig {
+            device_id,
+            client_id,
+            ..SessionConfig::default()
+        };
+
         let credentials = Credentials::with_access_token(access_token);
 
-        info!("Connecting librespot..");
+        info!(
+            "Connecting librespot as device {}..",
+            session_config.device_id
+        );
         let session = Session::new(session_config, None);
         session
             .connect(credentials, false)
@@ -163,7 +210,7 @@ impl Respot {
         Ok(Self { session })
     }
 
-    pub async fn reauth(refresh_token: &str) -> Result<Self, ParrotError> {
+    pub async fn reauth(refresh_token: &str) -> Result<(Self, Option<String>), ParrotError> {
         let (client_id, client_secret) = match (
             env::var("SPOTIFY_CLIENT_ID"),
             env::var("SPOTIFY_CLIENT_SECRET"),
@@ -190,7 +237,8 @@ impl Respot {
             .await
             .map_err(SpotifyError::DoNotRedeem)?;
 
-        Respot::auth(&resp.access_token).await
+        let respot = Respot::auth(&resp.access_token).await?;
+        Ok((respot, resp.refresh_token))
     }
 
     pub fn extract(id: SpotifyUri) -> QueryType {
@@ -347,19 +395,7 @@ impl Compose for RespotTrack {
     }
 
     async fn aux_metadata(&mut self) -> Result<AuxMetadata, AudioStreamError> {
-        let l = RESPOT.lock().await;
-
-        let respot = l.as_ref().map_err(|e| {
-            error!("Got error when respot: {e:?}");
-            AudioStreamError::Fail("no spotify session".into())
-        })?;
-
-        let track = Track::get(&respot.session, &self.track)
-            .await
-            .map_err(|e| {
-                error!("Failed to get track metadata: {e:?}");
-                AudioStreamError::Fail("failed to fetch track metadata".into())
-            })?;
+        let track = respot_track_metadata(&self.track).await?;
 
         let artist = track
             .artists
@@ -384,6 +420,29 @@ impl Compose for RespotTrack {
             thumbnail: None,
         })
     }
+}
+
+async fn respot_track_metadata(uri: &SpotifyUri) -> Result<Track, AudioStreamError> {
+    let session = respot_session().await.map_err(|e| {
+        error!("Failed to obtain a Spotify session: {e:?}");
+        AudioStreamError::Fail("no spotify session".into())
+    })?;
+
+    if let Ok(track) = Track::get(&session, uri).await {
+        return Ok(track);
+    }
+
+    error!("Failed to get track metadata, retrying after reauth");
+
+    let session = refresh_session().await.map_err(|e| {
+        error!("Failed to reauth Spotify session: {e:?}");
+        AudioStreamError::Fail("no spotify session".into())
+    })?;
+
+    Track::get(&session, uri).await.map_err(|e| {
+        error!("Failed to get track metadata: {e:?}");
+        AudioStreamError::Fail("failed to fetch track metadata".into())
+    })
 }
 
 impl From<RespotTrack> for Input {
@@ -476,6 +535,7 @@ struct AuthResponse {
 #[derive(Deserialize, Debug)]
 struct ReAuthResponse {
     access_token: String,
+    refresh_token: Option<String>,
 }
 
 #[instrument(level = "info", skip_all)]
@@ -567,7 +627,7 @@ pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
     let (access_token, refresh_token) =
         get_tokens(&auth_code, &redirect_url, &client_id, &client_secret).await?;
 
-    set_refresh_token(&refresh_token);
+    set_refresh_token(&refresh_token).await;
 
     let mut d = ctx.data.write().await;
     let global_settings = d.get_mut::<GlobalSettingsMap>().unwrap();
