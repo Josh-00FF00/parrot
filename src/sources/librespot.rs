@@ -1,8 +1,9 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     env,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek},
+    mem::size_of,
     str::FromStr,
     sync::{Arc, LazyLock},
     time::Duration,
@@ -30,7 +31,6 @@ use tiny_http::{Server, SslConfig};
 use tokio::sync::Mutex as TMutex;
 use tracing::{error, info, instrument};
 use url::Url;
-use zerocopy::IntoBytes;
 
 use librespot::playback::player::{Decoder, PlayerLoadedTrackData, PlayerTrackLoader};
 use thiserror::Error;
@@ -258,7 +258,8 @@ impl RespotTrack {
 
 struct RespotDecoder {
     decoder: Mutex<Decoder>,
-    internal_buffer: VecDeque<u8>,
+    buffer: Vec<u8>,
+    read_pos: usize,
 }
 
 impl Seek for RespotDecoder {
@@ -281,30 +282,48 @@ impl Read for RespotDecoder {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut d = self.decoder.lock();
 
-        while let Some((_, pkt)) = d
-            .next_packet()
-            .map_err(|_| io::Error::other("Failed to get next spotify packet"))?
-        {
+        while self.buffer.len() - self.read_pos < buf.len() {
+            let Some((_, pkt)) = d
+                .next_packet()
+                .map_err(|_| io::Error::other("Failed to get next spotify packet"))?
+            else {
+                break;
+            };
+
+            if self.read_pos > 0 {
+                self.buffer.drain(..self.read_pos);
+                self.read_pos = 0;
+            }
+
             match pkt {
                 AudioPacket::Samples(samples) => {
-                    for b in samples.into_iter() {
-                        self.internal_buffer
-                            .write((b as f32).as_bytes())
-                            .map_err(|e| io::Error::other(e.to_string()))?;
+                    const SAMPLE_BYTES: usize = size_of::<f32>();
+
+                    let start = self.buffer.len();
+                    self.buffer.resize(start + samples.len() * SAMPLE_BYTES, 0);
+
+                    let (chunks, _) = self.buffer[start..].as_chunks_mut::<SAMPLE_BYTES>();
+                    for (dst, sample) in chunks.iter_mut().zip(samples) {
+                        *dst = (sample as f32).to_ne_bytes();
                     }
                 }
                 AudioPacket::Raw(vec) => {
-                    self.internal_buffer
-                        .write(&vec)
-                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    self.buffer.extend_from_slice(&vec);
                 }
             }
-
-            if self.internal_buffer.len() >= buf.len() {
-                break;
-            }
         }
-        self.internal_buffer.read(buf)
+
+        let buffered = &self.buffer[self.read_pos..];
+        let copied = buffered.len().min(buf.len());
+        buf[..copied].copy_from_slice(&buffered[..copied]);
+        self.read_pos += copied;
+
+        if self.read_pos == self.buffer.len() {
+            self.buffer.clear();
+            self.read_pos = 0;
+        }
+
+        Ok(copied)
     }
 }
 
@@ -329,7 +348,8 @@ impl Compose for RespotTrack {
         let input: Box<dyn MediaSource> = Box::new(RawAdapter::new(
             RespotDecoder {
                 decoder: Mutex::new(track.decoder),
-                internal_buffer: VecDeque::new(),
+                buffer: Vec::new(),
+                read_pos: 0,
             },
             44100,
             2,

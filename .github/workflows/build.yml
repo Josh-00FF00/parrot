@@ -6,18 +6,13 @@ on:
 jobs:
   build:
     name: Build
-    strategy:
-      matrix:
-        rust-version: ['1.85', 'stable']
     runs-on: ubuntu-latest
     steps:
       - name: Repository Checkout
         uses: actions/checkout@v4
 
       - name: Install Toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust-version }}
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
