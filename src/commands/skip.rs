@@ -1,7 +1,7 @@
 use crate::{
     errors::{ParrotError, verify},
     messaging::message::ParrotMessage,
-    utils::{create_response, track_to_meta},
+    utils::{command_guild_id, create_response, track_to_meta},
 };
 use serenity::{all::CommandInteraction, client::Context};
 use songbird::tracks::{TrackHandle, TrackQueue};
@@ -10,7 +10,7 @@ use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all)]
 pub async fn skip(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let args = interaction.data.options.clone();
 
     let to_skip = args.first().and_then(|a| a.value.as_i64()).unwrap_or(1) as usize;
@@ -28,7 +28,7 @@ pub async fn skip(ctx: &Context, interaction: &mut CommandInteraction) -> Result
         v.drain(1..tracks_to_skip);
     });
 
-    force_skip_top_track(&queue).await?;
+    force_skip_top_track(queue).await?;
     info!("Skipped! Creating response");
     create_skip_response(ctx, interaction, handler.queue(), tracks_to_skip).await
 }

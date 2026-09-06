@@ -3,3 +3,10 @@
 /data/
 
 .env
+.env.*
+.test-env*
+cookies*.txt
+tmp/
+result
+result-*
+a.out

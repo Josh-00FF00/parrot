@@ -8,21 +8,19 @@ jobs:
     name: Build
     strategy:
       matrix:
-        rust-version: ['1.79', 'stable']
+        rust-version: ['1.85', 'stable']
     runs-on: ubuntu-latest
     steps:
       - name: Repository Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust-version }}
-          profile: minimal
-          override: true
 
       - name: Cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build Binary
         run: cargo build --locked

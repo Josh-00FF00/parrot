@@ -2,9 +2,9 @@ use crate::commands::play::{Mode, QueryType};
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader},
-    process::Command,
-    process::Stdio,
+    process::{Command, Stdio},
 };
+use tracing::error;
 
 pub struct YouTube {}
 
@@ -18,32 +18,46 @@ impl YouTube {
     }
 
     pub async fn ytdl_playlist(uri: &str, mode: Mode) -> Option<Vec<String>> {
-        let mut args = vec![uri, "--flat-playlist", "-j"];
+        let mut args = vec![
+            uri.to_string(),
+            "--flat-playlist".to_string(),
+            "-j".to_string(),
+        ];
         match mode {
-            Mode::Reverse => args.push("--playlist-reverse"),
-            Mode::Shuffle => args.push("--playlist-random"),
+            Mode::Reverse => args.push("--playlist-reverse".to_string()),
+            Mode::Shuffle => args.push("--playlist-random".to_string()),
             _ => {}
         }
 
-        let child = Command::new("yt-dlp")
+        let mut child = Command::new("yt-dlp")
             .args(args)
             .stdout(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
-            .unwrap();
+            .map_err(|e| error!("Failed to spawn yt-dlp: {e}"))
+            .ok()?;
 
-        let stdout = child.stdout?;
+        let Some(stdout) = child.stdout.take() else {
+            error!("yt-dlp produced no stdout");
+            return None;
+        };
+
         let reader = BufReader::new(stdout);
 
-        let lines = reader.lines().map_while(Result::ok).map(|line| {
-            let entry: Value = serde_json::from_str(&line).unwrap();
-            entry
-                .get("webpage_url")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string()
-        });
+        let mut urls = Vec::new();
 
-        Some(lines.collect())
+        for line in reader.lines().map_while(Result::ok) {
+            if let Ok(entry) = serde_json::from_str::<Value>(&line)
+                && let Some(url) = entry.get("webpage_url").and_then(Value::as_str)
+            {
+                urls.push(url.to_string());
+            }
+        }
+
+        if let Err(e) = child.wait() {
+            error!("Failed to wait for yt-dlp: {e}");
+        }
+
+        Some(urls)
     }
 }

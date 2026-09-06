@@ -13,13 +13,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let ip = reqwest::get("https://ifconfig.me/ip").await?.text().await?;
-    println!("My IP address is: {}", ip);
+    match reqwest::get("https://ifconfig.me/ip").await {
+        Ok(resp) => match resp.text().await {
+            Ok(ip) => info!("My IP address is: {ip}"),
+            Err(err) => error!("Failed to read IP address: {err:?}"),
+        },
+        Err(err) => error!("Failed to fetch IP address: {err:?}"),
+    }
 
     match std::env::var("CREDENTIALS_DIRECTORY") {
         Ok(cred_dir) => {
             info!("Loading creds from: {cred_dir}");
-            dotenv::from_path(Path::new(&cred_dir).join("app.env"))
+            dotenvy::from_path(Path::new(&cred_dir).join("app.env"))
                 .expect("Failed to load from CREDENTIALS_DIRECTORY");
 
             info!("Loading ytdlp cookies");
@@ -27,12 +32,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let builder = reqwest::Client::builder();
             let cookies = Path::new(&cred_dir).join("cookies.txt");
 
-            if let Ok(_jar) = load_cookie_jar_from_path(&cookies) {
-                info!("Successfully loaded cookies into cookie jar");
-                // builder = builder.cookie_provider(jar);
+            let client = match load_cookie_jar_from_path(&cookies) {
+                Ok(jar) => {
+                    info!("Successfully loaded cookies into cookie jar");
+                    builder.cookie_provider(jar).build()
+                }
+                Err(err) => {
+                    info!("No cookies loaded, using default client: {err}");
+                    builder.build()
+                }
             }
-
-            let client = builder.build().expect("Failed to build reqwest client");
+            .expect("Failed to build reqwest client");
 
             REQWEST_CLIENT
                 .set(client)
@@ -40,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Err(_) => {
             info!("Loading default env");
-            let _ = dotenv::dotenv();
+            let _ = dotenvy::dotenv();
         }
     }
 

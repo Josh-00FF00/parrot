@@ -2,8 +2,7 @@ use crate::messaging::messages::{
     FAIL_ANOTHER_CHANNEL, FAIL_AUTHOR_DISCONNECTED, FAIL_AUTHOR_NOT_FOUND,
     FAIL_NO_VOICE_CONNECTION, FAIL_WRONG_CHANNEL, NOTHING_IS_PLAYING, QUEUE_IS_EMPTY,
 };
-use crate::sources::librespot::{RespotError, SpotifyError};
-use rspotify::ClientError as RSpotifyClientError;
+use crate::sources::librespot::SpotifyError;
 use serenity::{model::mention::Mention, prelude::SerenityError};
 
 use songbird::error::PlayError as InputError;
@@ -25,13 +24,13 @@ pub enum ParrotError {
     TrackFail(InputError),
     MissingTrack,
     AlreadyConnected(Mention),
-    Serenity(SerenityError),
-    RSpotify(RSpotifyClientError),
-    Respot(RespotError),
+    Serenity(Box<SerenityError>),
     IO(std::io::Error),
     Serde(serde_json::Error),
     Spotify(SpotifyError),
 }
+
+const _: () = assert!(std::mem::size_of::<ParrotError>() <= 128);
 
 /// `ParrotError` implements the [`Debug`] and [`Display`] traits
 /// meaning it implements the [`std::error::Error`] trait.
@@ -62,10 +61,8 @@ impl Display for ParrotError {
             Self::TrackFail(err) => f.write_str(&format!("{err}")),
             Self::MissingTrack => f.write_str("Couldn't find track"),
             Self::Serenity(err) => f.write_str(&format!("{err}")),
-            Self::RSpotify(err) => f.write_str(&format!("{err}")),
             Self::IO(err) => f.write_str(&format!("{err}")),
             Self::Serde(err) => f.write_str(&format!("{err}")),
-            Self::Respot(err) => f.write_str(&format!("{err}")),
             Self::Spotify(err) => f.write_str(&format!("{err}")),
         }
     }
@@ -115,15 +112,8 @@ impl From<SerenityError> for ParrotError {
                 Self::NotInRange(param, value as isize, lower as isize, upper as isize)
             }
             SerenityError::Other(msg) => Self::Other(msg),
-            _ => Self::Serenity(err),
+            _ => Self::Serenity(Box::new(err)),
         }
-    }
-}
-
-/// Provides an implementation to convert a rspotify [`ClientError`] to a [`ParrotError`].
-impl From<RSpotifyClientError> for ParrotError {
-    fn from(err: RSpotifyClientError) -> ParrotError {
-        ParrotError::RSpotify(err)
     }
 }
 

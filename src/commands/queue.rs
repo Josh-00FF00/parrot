@@ -6,7 +6,7 @@ use crate::{
         QUEUE_EXPIRED, QUEUE_NO_SONGS, QUEUE_NOTHING_IS_PLAYING, QUEUE_NOW_PLAYING, QUEUE_PAGE,
         QUEUE_PAGE_OF, QUEUE_UP_NEXT,
     },
-    utils::{get_human_readable_timestamp, track_to_meta},
+    utils::{command_guild_id, get_human_readable_timestamp, track_to_meta},
 };
 use serenity::{
     all::{
@@ -34,9 +34,9 @@ const EMBED_TIMEOUT: u64 = 3600;
 
 #[instrument(level = "info", skip_all)]
 pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let manager = songbird::get(ctx).await.unwrap();
-    let call = manager.get(guild_id).unwrap();
+    let call = manager.get(guild_id).ok_or(ParrotError::NotConnected)?;
 
     let mut handler = call.lock().await;
     let queue = handler.queue();
@@ -78,13 +78,13 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
             guild_id,
         },
     );
+    drop(handler);
 
     let mut cib = message
         .await_component_interactions(ctx)
         .timeout(Duration::from_secs(EMBED_TIMEOUT))
         .stream();
 
-    let interaction_c = interaction.clone();
     let ctx_c = ctx.clone();
     info!("Launching monitor thread!");
     tokio::spawn(
@@ -96,28 +96,35 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
 
                 // refetch the queue in case it changed
                 let manager = songbird::get(&ctx_c).await.unwrap();
-                let call = manager.get(guild_id).unwrap();
-                let handler = call.lock().await;
-                let queue = handler.queue();
-
-                let num_pages = calculate_num_pages(&queue.current_queue());
-                let mut page_wlock = page.write().await;
-
-                *page_wlock = match btn_id.as_str() {
-                    "<<" => 0,
-                    "<" => min(page_wlock.saturating_sub(1), num_pages - 1),
-                    ">" => min(page_wlock.add(1), num_pages - 1),
-                    ">>" => num_pages - 1,
-                    _ => continue,
+                let Some(call) = manager.get(guild_id) else {
+                    break;
                 };
 
-                if let Err(e) = interaction_c
+                let (current_queue, new_page, num_pages) = {
+                    let handler = call.lock().await;
+                    let queue = handler.queue();
+
+                    let num_pages = calculate_num_pages(&queue.current_queue());
+                    let mut page_wlock = page.write().await;
+
+                    *page_wlock = match btn_id.as_str() {
+                        "<<" => 0,
+                        "<" => min(page_wlock.saturating_sub(1), num_pages - 1),
+                        ">" => min(page_wlock.add(1), num_pages - 1),
+                        ">>" => num_pages - 1,
+                        _ => continue,
+                    };
+
+                    (queue.current_queue(), *page_wlock, num_pages)
+                };
+
+                if let Err(e) = mci
                     .create_response(
                         &ctx_c.http,
                         CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
-                                .add_embed(create_queue_embed(&queue.current_queue(), *page_wlock))
-                                .components(build_nav_btns(*page_wlock, num_pages)),
+                                .add_embed(create_queue_embed(&current_queue, new_page))
+                                .components(build_nav_btns(new_page, num_pages)),
                         ),
                     )
                     .await
@@ -129,13 +136,15 @@ pub async fn queue(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
 
             info!("Exiting");
 
-            message
+            if let Err(e) = message
                 .edit(
                     &ctx_c.http,
                     EditMessage::new().add_embed(CreateEmbed::new().description(QUEUE_EXPIRED)),
                 )
                 .await
-                .unwrap();
+            {
+                error!("Failed to mark queue message as expired: {e:?}");
+            }
 
             forget_queue_message(&ctx_c.data, &mut message, guild_id)
                 .await
@@ -152,12 +161,19 @@ pub fn create_queue_embed(tracks: &[TrackHandle], page: usize) -> CreateEmbed {
 
     let (embed, description) = if !tracks.is_empty() {
         let metadata = track_to_meta(&tracks[0]);
+        let title = metadata
+            .title
+            .clone()
+            .unwrap_or_else(|| "Missing title".to_string());
+        let url = metadata
+            .source_url
+            .clone()
+            .unwrap_or_else(|| "Missing url".to_string());
+
         (
             embed,
             format!(
-                "[{}]({}) • `{}`",
-                metadata.title.as_ref().unwrap(),
-                metadata.source_url.as_ref().unwrap(),
+                "[{title}]({url}) • `{}`",
                 get_human_readable_timestamp(metadata.duration)
             ),
         )
@@ -211,17 +227,20 @@ fn build_queue_page(tracks: &[TrackHandle], page: usize) -> String {
 
     for (i, queued) in queue.iter().enumerate() {
         let metadata = track_to_meta(queued).clone();
-        let title = metadata.title.as_ref().unwrap();
-        let url = metadata.source_url.as_ref().unwrap();
+        let title = metadata
+            .title
+            .clone()
+            .unwrap_or_else(|| "Missing title".to_string());
+        let url = metadata
+            .source_url
+            .clone()
+            .unwrap_or_else(|| "Missing url".to_string());
         let duration = get_human_readable_timestamp(metadata.duration);
 
         let _ = writeln!(
             description,
-            "`{}.` [{}]({}) • `{}`",
+            "`{}.` [{title}]({url}) • `{duration}`",
             i + start_idx + 1,
-            title,
-            url,
-            duration
         );
     }
 
@@ -237,11 +256,15 @@ pub async fn forget_queue_message(
     data: &Arc<RwLock<TypeMap>>,
     message: &mut Message,
     guild_id: GuildId,
-) -> Result<(), ()> {
+) -> Result<(), ParrotError> {
     let mut data_wlock = data.write().await;
-    let cache_map = data_wlock.get_mut::<GuildCacheMap>().ok_or(())?;
+    let cache_map = data_wlock
+        .get_mut::<GuildCacheMap>()
+        .ok_or(ParrotError::Other("guild cache missing"))?;
 
-    let cache = cache_map.get_mut(&guild_id).ok_or(())?;
+    let cache = cache_map
+        .get_mut(&guild_id)
+        .ok_or(ParrotError::Other("guild cache entry missing"))?;
     cache.queue_messages.retain(|(m, _)| m.id != message.id);
 
     Ok(())

@@ -2,7 +2,7 @@ use crate::{
     errors::ParrotError,
     guild::settings::{GuildSettings, GuildSettingsMap},
     messaging::message::ParrotMessage,
-    utils::create_response,
+    utils::{command_guild_id, create_response},
 };
 use serenity::{all::CommandInteraction, client::Context};
 use tracing::instrument;
@@ -12,7 +12,7 @@ pub async fn autopause(
     ctx: &Context,
     interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let mut data = ctx.data.write().await;
     let settings = data.get_mut::<GuildSettingsMap>().unwrap();
 

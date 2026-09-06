@@ -18,14 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-bump
         run: cargo install cargo-bump
@@ -38,10 +34,10 @@ jobs:
 
       - name: Get latest version
         id: get_version
-        run: echo ::set-output name=VERSION::$(cargo pkgid | cut -d# -f2)
+        run: echo "VERSION=$(cargo pkgid | cut -d'#' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Create bump PR
-        uses: peter-evans/create-pull-request@v3
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: 'chore: bump version to ${{ steps.get_version.outputs.VERSION }}'

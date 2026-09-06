@@ -1,6 +1,6 @@
 use crate::{
     errors::ParrotError,
-    utils::{create_embed_response, create_now_playing_embed},
+    utils::{command_guild_id, create_embed_response, create_now_playing_embed},
 };
 use serenity::{all::CommandInteraction, client::Context};
 use tracing::instrument;
@@ -10,7 +10,7 @@ pub async fn now_playing(
     ctx: &Context,
     interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let manager = songbird::get(ctx).await.unwrap();
     let call = manager.get(guild_id).unwrap();
 

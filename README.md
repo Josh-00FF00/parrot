@@ -10,7 +10,7 @@
   <a href="https://github.com/aquelemiguel/parrot/actions/workflows/ci_workflow.yml"><img src="https://github.com/aquelemiguel/parrot/actions/workflows/ci_workflow.yml/badge.svg"></a>
   <a href="https://deps.rs/repo/github/aquelemiguel/parrot"><img src="https://deps.rs/repo/github/aquelemiguel/parrot/status.svg"></a>
   <a href="https://github.com/aquelemiguel/parrot/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="https://github.com/aquelemiguel/parrot/"><img src="https://img.shields.io/badge/rustc-1.65-blue.svg"></a>
+  <a href="https://github.com/aquelemiguel/parrot/"><img src="https://img.shields.io/badge/rustc-1.85-blue.svg"></a>
 </p>
 
 ## Deployment
@@ -18,6 +18,14 @@
 ### Usage
 
 Just [create a bot account](https://github.com/aquelemiguel/parrot/wiki/Create-Your-Discord-Bot), and copy its **token** and **application id** to a `.env` with the `DISCORD_TOKEN` and `DISCORD_APP_ID` environment variables respectively. Optionally, you may also define `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`. We recommend using our [.env.example](https://github.com/aquelemiguel/parrot/blob/main/.env.example) as a starting point.
+
+Additional optional environment variables:
+
+- `STATE_DIRECTORY`: directory where guild settings and Spotify tokens are persisted (defaults to `data/settings`).
+- `CREDENTIALS_DIRECTORY`: when set, loads `app.env` (containing the variables above) and `cookies.txt` (Netscape-format cookies passed to yt-dlp) from the given directory.
+- `SPOTIFY_ADMIN_IDS`: comma-separated Discord user IDs allowed to run `/login`; when unset, anyone can initiate the Spotify login flow.
+
+Spotify playback requires a one-time `/login` command in Discord to authorise the bot with your Spotify account.
 
 ### Docker
 

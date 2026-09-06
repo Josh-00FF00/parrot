@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serenity::prelude::TypeMapKey;
-use tracing::info;
 use std::{
-    fs::{create_dir_all, OpenOptions},
+    fs::{OpenOptions, create_dir_all},
     io::{BufReader, BufWriter},
     path::Path,
 };
+use tracing::info;
 
-use crate::{errors::ParrotError, SETTINGS_PATH};
+use crate::{SETTINGS_PATH, errors::ParrotError};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct SpotifySettings {
@@ -52,6 +52,15 @@ impl GlobalSettings {
             .truncate(true)
             .create(true)
             .open(path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(0o600);
+            file.set_permissions(permissions)?;
+        }
 
         let writer = BufWriter::new(file);
         serde_json::to_writer(writer, self)?;

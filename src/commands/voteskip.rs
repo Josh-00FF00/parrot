@@ -4,29 +4,41 @@ use crate::{
     errors::{ParrotError, verify},
     guild::cache::GuildCacheMap,
     messaging::message::ParrotMessage,
-    utils::create_response,
+    utils::{command_guild_id, create_response},
 };
 use serenity::{
     all::{CommandInteraction, GuildId},
     client::Context,
     prelude::{Mentionable, RwLock, TypeMap},
 };
+use std::{cmp::max, collections::HashSet, sync::Arc};
 use tracing::instrument;
-use std::{collections::HashSet, sync::Arc};
 
 #[instrument(level = "info", skip_all)]
 pub async fn voteskip(
     ctx: &Context,
     interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
-    let bot_channel_id = get_voice_channel_for_user(
-        &ctx.cache.guild(guild_id).unwrap(),
-        &ctx.cache.current_user().id,
-    )
-    .unwrap();
+    let guild_id = command_guild_id(interaction)?;
+
+    let listeners = {
+        let guild = ctx.cache.guild(guild_id).ok_or(ParrotError::NotConnected)?;
+        let bot_id = ctx.cache.current_user().id;
+
+        let bot_channel_id =
+            get_voice_channel_for_user(&guild, &bot_id).ok_or(ParrotError::NotConnected)?;
+
+        guild
+            .voice_states
+            .iter()
+            .filter(|(_, voice_state)| {
+                voice_state.channel_id == Some(bot_channel_id) && voice_state.user_id != bot_id
+            })
+            .count()
+    };
+
     let manager = songbird::get(ctx).await.unwrap();
-    let call = manager.get(guild_id).unwrap();
+    let call = manager.get(guild_id).ok_or(ParrotError::NotConnected)?;
     let handler = call.lock().await;
     let queue = handler.queue();
 
@@ -38,15 +50,11 @@ pub async fn voteskip(
     let cache = cache_map.entry(guild_id).or_default();
     cache.current_skip_votes.insert(interaction.user.id);
 
-    let guild_users = ctx.cache.guild(guild_id).unwrap().voice_states.clone();
-    let channel_guild_users = guild_users
-        .into_values()
-        .filter(|v| v.channel_id.unwrap() == bot_channel_id);
-    let skip_threshold = channel_guild_users.count() / 2;
+    let skip_threshold = max(1, listeners / 2);
 
     if cache.current_skip_votes.len() >= skip_threshold {
-        force_skip_top_track(&queue).await?;
-        create_skip_response(ctx, interaction, &queue, 1).await
+        force_skip_top_track(queue).await?;
+        create_skip_response(ctx, interaction, queue, 1).await
     } else {
         create_response(
             &ctx.http,
@@ -60,11 +68,18 @@ pub async fn voteskip(
     }
 }
 
-pub async fn forget_skip_votes(data: &Arc<RwLock<TypeMap>>, guild_id: GuildId) -> Result<(), ()> {
+pub async fn forget_skip_votes(
+    data: &Arc<RwLock<TypeMap>>,
+    guild_id: GuildId,
+) -> Result<(), ParrotError> {
     let mut data = data.write().await;
 
-    let cache_map = data.get_mut::<GuildCacheMap>().ok_or(())?;
-    let cache = cache_map.get_mut(&guild_id).ok_or(())?;
+    let cache_map = data
+        .get_mut::<GuildCacheMap>()
+        .ok_or(ParrotError::Other("guild cache missing"))?;
+    let cache = cache_map
+        .get_mut(&guild_id)
+        .ok_or(ParrotError::Other("guild cache entry missing"))?;
     cache.current_skip_votes = HashSet::new();
 
     Ok(())

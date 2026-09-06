@@ -8,7 +8,7 @@ use crate::{
     errors::ParrotError,
     global_settings::{GlobalSettings, GlobalSettingsMap},
     guild::settings::{GuildSettings, GuildSettingsMap},
-    sources::librespot::{RESPOT, Respot, login},
+    sources::librespot::{login, refresh_session, set_refresh_token},
     utils::create_response_text,
 };
 use serenity::{
@@ -30,7 +30,7 @@ pub struct SerenityHandler;
 #[async_trait]
 impl EventHandler for SerenityHandler {
     async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("🦜 {} is connected!", ready.user.name);
+        info!("🦜 {} is connected!", ready.user.name);
 
         // sets parrot activity status message to /play
         let activity = ActivityData::listening("/play");
@@ -54,11 +54,10 @@ impl EventHandler for SerenityHandler {
         info!("Got global: {:?}", global);
         if let Some(settings) = &global.spotify {
             info!("Found saved refresh token, reauthing...");
-            match Respot::reauth(&settings.spotify_refresh_token).await {
-                Ok(resp) => {
-                    *RESPOT.lock().await = Ok(resp);
-                    info!("Spotify reauth success!");
-                }
+            set_refresh_token(&settings.spotify_refresh_token);
+
+            match refresh_session().await {
+                Ok(_) => info!("Spotify reauth success!"),
                 Err(e) => error!("Failed to auth spotify: {e:?}"),
             }
         }
@@ -87,8 +86,11 @@ impl EventHandler for SerenityHandler {
             return self.self_deafen(&ctx, new.guild_id, new).await;
         }
 
+        let Some(guild_id) = new.guild_id else {
+            return;
+        };
+
         let manager = songbird::get(&ctx).await.unwrap();
-        let guild_id = new.guild_id.unwrap();
 
         if manager.get(guild_id).is_some() {
             manager.remove(guild_id).await.ok();
@@ -261,7 +263,10 @@ impl SerenityHandler {
         guild
             .set_commands(&ctx.http, x)
             .await
-            .expect("Couldn't make commands")
+            .unwrap_or_else(|err| {
+                error!("Failed to create commands for guild {guild}: {err:?}");
+                Vec::new()
+            })
     }
 
     async fn load_global_settings(&self, ctx: &Context) {
@@ -305,7 +310,9 @@ impl SerenityHandler {
         command: &mut CommandInteraction,
     ) -> Result<(), ParrotError> {
         let command_name = command.data.name.clone();
-        let guild_id = command.guild_id.unwrap();
+        let guild_id = command.guild_id.ok_or(ParrotError::Other(
+            "This command can only be used in a server",
+        ))?;
 
         // get songbird voice client
         let manager = songbird::get(ctx).await.unwrap();
@@ -322,7 +329,9 @@ impl SerenityHandler {
         let user_id = command.user.id;
         let bot_id = ctx.cache.current_user().id;
         {
-            let guild = ctx.cache.guild(guild_id).unwrap();
+            let Some(guild) = ctx.cache.guild(guild_id) else {
+                return Err(ParrotError::Other("Could not fetch this server's data"));
+            };
 
             match command_name.as_str() {
                 "autopause" | "clear" | "leave" | "pause" | "remove" | "repeat" | "resume"
@@ -391,16 +400,19 @@ impl SerenityHandler {
     }
 
     async fn self_deafen(&self, ctx: &Context, guild: Option<GuildId>, new: VoiceState) {
-        let Ok(user) = ctx.http.get_current_user().await else {
-            return;
-        };
+        let current_user_id = ctx.cache.current_user().id;
 
-        if user.id == new.user_id && !new.deaf {
-            guild
-                .unwrap()
+        if current_user_id == new.user_id && !new.deaf {
+            let Some(guild) = guild else {
+                return;
+            };
+
+            if let Err(err) = guild
                 .edit_member(&ctx.http, new.user_id, EditMember::new().deafen(true))
                 .await
-                .unwrap();
+            {
+                error!("Failed to self-deafen: {err:?}");
+            }
         }
     }
 

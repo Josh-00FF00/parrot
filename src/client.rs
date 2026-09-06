@@ -5,6 +5,7 @@ use tracing::info;
 use std::{collections::HashMap, env, error::Error};
 
 use crate::{
+    errors::ParrotError,
     global_settings::GlobalSettings,
     global_settings::GlobalSettingsMap,
     guild::{cache::GuildCacheMap, settings::GuildSettingsMap},
@@ -46,7 +47,7 @@ impl Client {
         Ok(Client { client })
     }
 
-    pub async fn start(&mut self) -> Result<(), serenity::Error> {
-        self.client.start().await
+    pub async fn start(&mut self) -> Result<(), ParrotError> {
+        self.client.start().await.map_err(Into::into)
     }
 }

@@ -3,7 +3,8 @@ use std::{
     collections::{HashMap, VecDeque},
     env,
     io::{self, Read, Seek, Write},
-    sync::Arc,
+    str::FromStr,
+    sync::{Arc, LazyLock, OnceLock},
     thread,
     time::Duration,
 };
@@ -11,10 +12,11 @@ use std::{
 use base64::{Engine, engine::general_purpose};
 use librespot::{
     core::{SpotifyUri, authentication::Credentials, config::SessionConfig, session::Session},
-    metadata::Track,
-    playback::{audio_backend::SinkError, config::PlayerConfig, decoder::AudioPacket, local_file},
+    metadata::{Metadata, Track},
+    playback::{config::PlayerConfig, decoder::AudioPacket, local_file},
 };
 use parking_lot::Mutex;
+use rand::random;
 use rcgen::{CertificateParams, KeyPair};
 use regex::Regex;
 use reqwest::header;
@@ -23,7 +25,6 @@ use serenity::{
     all::{CommandInteraction, Context},
     async_trait,
 };
-use snafu::Snafu;
 use songbird::input::{AudioStream, AudioStreamError, AuxMetadata, Compose, Input, RawAdapter};
 use symphonia::core::io::MediaSource;
 use tiny_http::{Server, SslConfig};
@@ -33,10 +34,7 @@ use tracing::{error, info, instrument};
 use url::Url;
 use zerocopy::IntoBytes;
 
-use librespot::playback::player::Decoder;
-use librespot::playback::player::PlayerTrackLoader;
-
-use lazy_static::lazy_static;
+use librespot::playback::player::{Decoder, PlayerTrackLoader};
 use thiserror::Error;
 
 use crate::{
@@ -46,16 +44,62 @@ use crate::{
     messaging::message::ParrotMessage,
     utils::{create_response, create_response_text},
 };
-use librespot::metadata::Metadata;
-use std::str::FromStr;
 
-use super::spotify::MediaType;
+#[derive(Clone, Copy, Debug)]
+pub enum MediaType {
+    Track,
+    Album,
+    Playlist,
+}
 
-lazy_static! {
-    pub static ref SPOTIFY_QUERY_REGEX: Regex =
-        Regex::new(r"spotify.com/(?P<media_type>.+)/(?P<media_id>.*?)(?:\?|$)").unwrap();
-    pub static ref RESPOT: TMutex<Result<Respot, ParrotError>> =
-        TMutex::new(Err(ParrotError::Other("no auth respot attempts")));
+impl FromStr for MediaType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "track" => Ok(Self::Track),
+            "album" => Ok(Self::Album),
+            "playlist" => Ok(Self::Playlist),
+            _ => Err(()),
+        }
+    }
+}
+
+pub static SPOTIFY_QUERY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"spotify.com/(?P<media_type>.+)/(?P<media_id>.*?)(?:\?|$)").unwrap()
+});
+
+pub static RESPOT: LazyLock<TMutex<Result<Respot, ParrotError>>> =
+    LazyLock::new(|| TMutex::new(Err(ParrotError::Other("no auth respot attempts"))));
+
+static REFRESH_TOKEN: OnceLock<String> = OnceLock::new();
+
+pub fn set_refresh_token(token: &str) {
+    let _ = REFRESH_TOKEN.set(token.to_string());
+}
+
+pub async fn refresh_session() -> Result<Session, ParrotError> {
+    let refresh_token = REFRESH_TOKEN
+        .get()
+        .ok_or(ParrotError::Spotify(SpotifyError::AuthMissing))?;
+
+    let respot = Respot::reauth(refresh_token).await?;
+    let session = respot.get_session();
+
+    *RESPOT.lock().await = Ok(respot);
+
+    Ok(session)
+}
+
+async fn respot_session() -> Result<Session, ParrotError> {
+    {
+        let l = RESPOT.lock().await;
+        if let Ok(respot) = l.as_ref() {
+            return Ok(respot.get_session());
+        }
+    }
+
+    refresh_session().await
 }
 
 #[derive(Clone)]
@@ -109,7 +153,10 @@ impl Respot {
 
         info!("Connecting librespot..");
         let session = Session::new(session_config, None);
-        session.connect(credentials, false).await.unwrap();
+        session
+            .connect(credentials, false)
+            .await
+            .map_err(|e| ParrotError::Spotify(SpotifyError::Other(Box::new(e))))?;
 
         info!("CONNECTED");
 
@@ -135,7 +182,6 @@ impl Respot {
             .form(&[
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh_token),
-                // ("client_id", &client_id), ONLY REQUIRED FOR PKCE extension
             ])
             .send()
             .await
@@ -149,23 +195,6 @@ impl Respot {
 
     pub fn extract(id: SpotifyUri) -> QueryType {
         QueryType::SpotifyUri(id)
-    }
-}
-
-#[derive(Debug, Snafu)]
-pub enum RespotError {}
-
-#[derive(Debug, Snafu)]
-pub enum RespotSinkError {
-    OnWrite,
-    OpenFailure,
-    NoOutput,
-}
-
-impl From<RespotError> for SinkError {
-    fn from(e: RespotError) -> SinkError {
-        let es = e.to_string();
-        SinkError::OnWrite(es)
     }
 }
 
@@ -213,11 +242,15 @@ impl Read for RespotDecoder {
             match pkt {
                 AudioPacket::Samples(samples) => {
                     for b in samples.into_iter() {
-                        self.internal_buffer.write((b as f32).as_bytes()).unwrap();
+                        self.internal_buffer
+                            .write((b as f32).as_bytes())
+                            .map_err(|e| io::Error::other(e.to_string()))?;
                     }
                 }
                 AudioPacket::Raw(vec) => {
-                    self.internal_buffer.write(&vec).unwrap();
+                    self.internal_buffer
+                        .write(&vec)
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                 }
             }
 
@@ -238,30 +271,62 @@ impl Compose for RespotTrack {
     async fn create_async(
         &mut self,
     ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        let respot_l = RESPOT.lock().await;
-        let respot = respot_l.as_ref().unwrap();
+        let session = match respot_session().await {
+            Ok(session) => session,
+            Err(e) => {
+                error!("Failed to obtain a Spotify session: {e:?}");
+                return Err(AudioStreamError::Fail("no spotify session".into()));
+            }
+        };
 
         let ptl = PlayerTrackLoader {
-            session: respot.session.clone(),
+            session,
             config: PlayerConfig::default(),
             local_file_lookup: Arc::new(local_file::create_local_file_lookup(&[])),
         };
-        drop(respot_l);
 
         info!("Creating in async!");
 
         let handle = Handle::current();
-        let t = self.track.clone();
+        let track_uri = self.track.clone();
         let (result_tx, result_rx) = oneshot::channel();
 
         thread::spawn(move || {
-            let data = handle.block_on(ptl.load_track(t, 0));
+            let mut data = handle.block_on(ptl.load_track(track_uri.clone(), 0));
+
+            if data.is_none() {
+                handle.block_on(async {
+                    match refresh_session().await {
+                        Ok(session) => {
+                            info!("Reauthed Spotify session, retrying track load");
+                            let ptl = PlayerTrackLoader {
+                                session,
+                                config: PlayerConfig::default(),
+                                local_file_lookup: Arc::new(local_file::create_local_file_lookup(
+                                    &[],
+                                )),
+                            };
+                            data = handle.block_on(ptl.load_track(track_uri, 0));
+                        }
+                        Err(e) => error!("Failed to reauth Spotify session: {e:?}"),
+                    }
+                });
+            }
+
             if let Some(data) = data {
                 let _ = result_tx.send(data);
             }
         });
 
-        let track = result_rx.await.unwrap();
+        let track = match result_rx.await {
+            Ok(track) => track,
+            Err(_) => {
+                error!("Failed to load Spotify track");
+                return Err(AudioStreamError::Fail(
+                    "failed to load spotify track".into(),
+                ));
+            }
+        };
 
         info!("Got track");
 
@@ -286,17 +351,21 @@ impl Compose for RespotTrack {
 
         let respot = l.as_ref().map_err(|e| {
             error!("Got error when respot: {e:?}");
-            AudioStreamError::Fail("".into())
+            AudioStreamError::Fail("no spotify session".into())
         })?;
 
         let track = Track::get(&respot.session, &self.track)
             .await
-            .expect("Failed to get track in respot");
+            .map_err(|e| {
+                error!("Failed to get track metadata: {e:?}");
+                AudioStreamError::Fail("failed to fetch track metadata".into())
+            })?;
 
         let artist = track
             .artists
             .iter()
             .fold(String::new(), |a, b| b.name.clone() + " " + &a);
+
         Ok(AuxMetadata {
             track: Some(track.name.clone()),
             artist: Some(artist),
@@ -349,11 +418,11 @@ fn get_http_callback(state: &str) -> Result<String, SpotifyError> {
     let addr = "0.0.0.0:12401";
     let subject_alt_names = vec![addr.to_string()];
 
-    let signing_key = KeyPair::generate().expect("Failed to gen keypair");
+    let signing_key = KeyPair::generate().map_err(|e| SpotifyError::Other(Box::new(e)))?;
     let cert = CertificateParams::new(subject_alt_names)
-        .expect("Failed to alt name")
+        .map_err(|e| SpotifyError::Other(Box::new(e)))?
         .self_signed(&signing_key)
-        .expect("Failed to generate cert param");
+        .map_err(|e| SpotifyError::Other(Box::new(e)))?;
 
     let conf = SslConfig {
         certificate: cert.pem().into(),
@@ -373,7 +442,7 @@ fn get_http_callback(state: &str) -> Result<String, SpotifyError> {
         .recv()
         .map_err(|e| SpotifyError::Other(Box::new(e)))?;
 
-    let base = Url::parse("https://{addr}").expect("My own url??");
+    let base = Url::parse("https://localhost").expect("My own url??");
     let url = base
         .join(req.url())
         .map_err(|e| SpotifyError::Other(Box::new(e)))?;
@@ -395,7 +464,7 @@ fn get_http_callback(state: &str) -> Result<String, SpotifyError> {
     // Don't really care, just being nice
     let _ = req.respond(tiny_http::Response::from_string("SUCCESS!"));
 
-    return Ok(code);
+    Ok(code)
 }
 
 #[derive(Deserialize, Debug)]
@@ -411,6 +480,22 @@ struct ReAuthResponse {
 
 #[instrument(level = "info", skip_all)]
 pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Result<(), ParrotError> {
+    if let Ok(admins) = env::var("SPOTIFY_ADMIN_IDS") {
+        let allowed: Vec<&str> = admins
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let user_id = interaction.user.id.get().to_string();
+
+        if !allowed.is_empty() && !allowed.contains(&user_id.as_str()) {
+            return Err(ParrotError::Other(
+                "You are not allowed to initiate the Spotify login",
+            ));
+        }
+    }
+
     let (client_id, client_secret) = match (
         env::var("SPOTIFY_CLIENT_ID"),
         env::var("SPOTIFY_CLIENT_SECRET"),
@@ -438,7 +523,7 @@ pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
 
     info!("Got redirect url: {redirect_url}");
 
-    let scope = vec![
+    let scope = [
         "streaming",
         "playlist-read-private",
         "app-remote-control",
@@ -448,7 +533,7 @@ pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
     ]
     .join(" ");
 
-    let state = "blep";
+    let state = format!("{:x}", random::<u64>());
 
     let auth_url = Url::parse_with_params(
         "https://accounts.spotify.com/authorize",
@@ -460,7 +545,7 @@ pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
             ("state", &state),
         ],
     )
-    .expect("url wut??");
+    .map_err(|e| SpotifyError::Other(Box::new(e)))?;
 
     info!("Starting callback webserver!");
     let result_handle = tokio::task::spawn_blocking(move || get_http_callback(&state));
@@ -472,16 +557,17 @@ pub async fn login(ctx: &Context, interaction: &mut CommandInteraction) -> Resul
             url: auth_url.to_string(),
         },
     )
-    .await
-    .expect("Failed to reply");
+    .await?;
 
     info!("Sent auth message, await response");
-    let auth_code = result_handle.await.expect("Join failed")?;
-
-    println!("Auth code = {auth_code}");
+    let auth_code = result_handle
+        .await
+        .map_err(|e| SpotifyError::Other(Box::new(e)))??;
 
     let (access_token, refresh_token) =
         get_tokens(&auth_code, &redirect_url, &client_id, &client_secret).await?;
+
+    set_refresh_token(&refresh_token);
 
     let mut d = ctx.data.write().await;
     let global_settings = d.get_mut::<GlobalSettingsMap>().unwrap();

@@ -8,6 +8,7 @@ use serenity::{
     builder::CreateEmbed,
     http::{Http, HttpError},
     model::channel::Message,
+    model::id::GuildId,
 };
 use songbird::{input::AuxMetadata, tracks::TrackHandle};
 use std::{
@@ -74,7 +75,7 @@ pub async fn create_embed_response(
     interaction: &mut CommandInteraction,
     embed: CreateEmbed,
 ) -> Result<(), ParrotError> {
-    match interaction
+    if let Err(err) = interaction
         .create_response(
             &http,
             CreateInteractionResponse::Message(
@@ -84,19 +85,19 @@ pub async fn create_embed_response(
         .await
         .map_err(Into::into)
     {
-        Ok(val) => Ok(val),
-        Err(err) => match err {
-            ParrotError::Serenity(Error::Http(HttpError::UnsuccessfulRequest(ref req))) => {
-                match req.error.code {
-                    40060 => edit_embed_response(http, interaction, embed)
-                        .await
-                        .map(|_| ()),
-                    _ => Err(err),
-                }
-            }
-            _ => Err(err),
-        },
+        if let ParrotError::Serenity(serenity_error) = &err
+            && let Error::Http(HttpError::UnsuccessfulRequest(req)) = serenity_error.as_ref()
+            && req.error.code == 40060
+        {
+            return edit_embed_response(http, interaction, embed)
+                .await
+                .map(|_| ());
+        }
+
+        return Err(err);
     }
+
+    Ok(())
 }
 
 pub async fn edit_embed_response(
@@ -122,7 +123,13 @@ pub async fn create_now_playing_embed(track: &TrackHandle) -> CreateEmbed {
         embed = embed.url(url);
     }
 
-    let position = get_human_readable_timestamp(Some(track.get_info().await.unwrap().position));
+    let position = track
+        .get_info()
+        .await
+        .ok()
+        .map(|info| info.position)
+        .map(|position| get_human_readable_timestamp(Some(position)))
+        .unwrap_or_else(|| "∞".to_string());
     let duration = get_human_readable_timestamp(meta.duration);
 
     let embed = embed.field("Progress", format!(">>> {} / {}", position, duration), true);
@@ -132,15 +139,20 @@ pub async fn create_now_playing_embed(track: &TrackHandle) -> CreateEmbed {
         None => embed.field("Channel", ">>> N/A", true),
     };
 
-    let source_url = meta.source_url.as_ref().unwrap();
-
-    let (footer_text, footer_icon_url) = get_footer_info(source_url);
-    embed.footer(CreateEmbedFooter::new(footer_text).icon_url(footer_icon_url))
+    match &meta.source_url {
+        Some(source_url) => {
+            let (footer_text, footer_icon_url) = get_footer_info(source_url);
+            embed.footer(CreateEmbedFooter::new(footer_text).icon_url(footer_icon_url))
+        }
+        None => embed,
+    }
 }
 
 pub fn get_footer_info(url: &str) -> (String, String) {
-    let url_data = Url::parse(url).unwrap();
-    let domain = url_data.host_str().unwrap();
+    let domain = Url::parse(url)
+        .ok()
+        .and_then(|url_data| url_data.host_str().map(|host| host.to_string()))
+        .unwrap_or_else(|| url.to_string());
 
     // remove www prefix because it looks ugly
     let domain = domain.replace("www.", "");
@@ -169,12 +181,67 @@ pub fn get_human_readable_timestamp(duration: Option<Duration>) -> String {
     }
 }
 
-pub fn compare_domains(domain: &str, subdomain: &str) -> bool {
-    subdomain == domain || subdomain.ends_with(domain)
+pub fn parse_timestamp(timestamp: &str) -> Option<u64> {
+    let parts: Vec<&str> = timestamp.split(':').collect();
+
+    if parts.len() > 3 {
+        return None;
+    }
+
+    let mut total = 0u64;
+
+    for part in parts {
+        total = total
+            .checked_mul(60)
+            .and_then(|total| total.checked_add(part.parse::<u64>().ok()?))?;
+    }
+
+    Some(total)
+}
+
+pub fn command_guild_id(interaction: &CommandInteraction) -> Result<GuildId, ParrotError> {
+    interaction.guild_id.ok_or(ParrotError::Other(
+        "This command can only be used in a server",
+    ))
+}
+
+pub fn compare_domains(configured: &str, host: &str) -> bool {
+    let configured = configured.trim_matches('.').to_ascii_lowercase();
+    let host = host.trim_matches('.').to_ascii_lowercase();
+
+    host == configured
+        || host
+            .strip_suffix(&configured)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 pub fn track_to_meta(track: &TrackHandle) -> Arc<AuxMetadata> {
     track.data::<AuxMetadata>()
+}
+
+pub struct NetscapeCookie {
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+    pub name: String,
+    pub value: String,
+}
+
+pub fn parse_netscape_cookie_line(line: &str) -> Option<NetscapeCookie> {
+    let parts: Vec<&str> = line.split('\t').collect();
+
+    // Netscape format standard usually requires 7 columns
+    if parts.len() < 7 {
+        return None;
+    }
+
+    Some(NetscapeCookie {
+        domain: parts[0].to_string(),
+        path: parts[2].to_string(),
+        secure: parts[3] == "TRUE",
+        name: parts[5].to_string(),
+        value: parts[6].to_string(),
+    })
 }
 
 pub fn load_cookie_jar_from_path(path: &Path) -> io::Result<Arc<Jar>> {
@@ -187,54 +254,38 @@ pub fn load_cookie_jar_from_path(path: &Path) -> io::Result<Arc<Jar>> {
         let trimmed = line.trim();
 
         if trimmed.is_empty() || trimmed.starts_with('#') {
-            // Skip comments (often header info) and empty lines
             continue;
         }
 
-        // Attempt to parse and add the cookie
-        if let Err(e) = add_netscape_cookie(&jar, trimmed) {
-            error!("Skipping invalid line: '{}'. Error: {:?}", trimmed, e);
+        let Some(cookie) = parse_netscape_cookie_line(trimmed) else {
+            error!("Skipping invalid cookie line: '{}'", trimmed);
+            continue;
+        };
+
+        let mut cookie_str = format!(
+            "{}={}; Domain={}; Path={}",
+            cookie.name, cookie.value, cookie.domain, cookie.path
+        );
+
+        if cookie.secure {
+            cookie_str.push_str("; Secure");
         }
+
+        // Determine the URL for the jar to associate the cookie with
+        // We remove the leading '.' (e.g., .youtube.com -> youtube.com)
+        let clean_domain = cookie.domain.trim_start_matches('.');
+
+        let scheme = if cookie.secure { "https" } else { "http" };
+
+        let url_str = format!("{}://{}", scheme, clean_domain);
+
+        let Ok(url) = url_str.parse::<Url>() else {
+            error!("Skipping cookie with invalid domain: '{}'", clean_domain);
+            continue;
+        };
+
+        jar.add_cookie_str(&cookie_str, &url);
     }
 
     Ok(jar)
-}
-
-fn add_netscape_cookie(jar: &Arc<Jar>, line: &str) -> Result<(), String> {
-    let parts: Vec<&str> = line.split('\t').collect();
-
-    // Netscape format standard usually requires 7 columns
-    if parts.len() < 7 {
-        return Err("Line has fewer than 7 columns".to_string());
-    }
-
-    let domain = parts[0];
-    let path = parts[2];
-    let secure = parts[3];
-    let _expiration = parts[4]; // Ignoring expiration for session-based scraping
-    let name = parts[5];
-    let value = parts[6];
-
-    // Build the cookie string: "Name=Value; Domain=...; Path=..."
-    let mut cookie_str = format!("{}={}; Domain={}; Path={}", name, value, domain, path);
-
-    if secure == "TRUE" {
-        cookie_str.push_str("; Secure");
-    }
-
-    // Determine the URL for the jar to associate the cookie with
-    // We remove the leading '.' (e.g., .youtube.com -> youtube.com)
-    let clean_domain = domain.trim_start_matches('.');
-
-    let scheme = if secure == "TRUE" { "https" } else { "http" };
-
-    let url_str = format!("{}://{}", scheme, clean_domain);
-
-    let url = url_str
-        .parse::<Url>()
-        .map_err(|_| format!("Could not parse URL from domain: {}", clean_domain))?;
-
-    jar.add_cookie_str(&cookie_str, &url);
-
-    Ok(())
 }

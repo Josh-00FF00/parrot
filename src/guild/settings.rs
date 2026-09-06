@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 use serenity::{model::id::GuildId, prelude::TypeMapKey};
 use std::{
     collections::{HashMap, HashSet},
-    fs::{create_dir_all, OpenOptions},
+    fs::{OpenOptions, create_dir_all},
     io::{BufReader, BufWriter},
     path::Path,
 };
 
-use crate::{errors::ParrotError, SETTINGS_PATH};
+use crate::{SETTINGS_PATH, errors::ParrotError};
 
 const DEFAULT_ALLOWED_DOMAINS: [&str; 2] = ["youtube.com", "youtu.be"];
 

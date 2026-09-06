@@ -33,7 +33,7 @@
       packages.${system}.default = craneLib.buildPackage (commonArgs // {
         inherit cargoArtifacts;
         pname = "spotbot";
-        version = "0.1.0";
+        version = "1.6.0";
         doCheck = false;
         
         postInstall = ''

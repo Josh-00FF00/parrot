@@ -3,7 +3,7 @@ use crate::{
     errors::ParrotError,
     handlers::{IdleHandler, TrackEndHandler},
     messaging::message::ParrotMessage,
-    utils::create_response,
+    utils::{command_guild_id, create_response},
 };
 use serenity::{
     all::{ChannelId, CommandInteraction},
@@ -20,13 +20,14 @@ pub async fn summon(
     interaction: &mut CommandInteraction,
     send_reply: bool,
 ) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let manager = songbird::get(ctx).await.unwrap();
 
-    let guild = ctx.cache.guild(guild_id).unwrap().clone();
-    let channel_opt = get_voice_channel_for_user(&guild, &interaction.user.id);
-
-    let channel_id = channel_opt.unwrap();
+    let channel_id = {
+        let guild = ctx.cache.guild(guild_id).ok_or(ParrotError::NotConnected)?;
+        get_voice_channel_for_user(&guild, &interaction.user.id)
+            .ok_or(ParrotError::AuthorNotFound)?
+    };
 
     if let Some(call) = manager.get(guild_id) {
         // We're already in a call somewhere

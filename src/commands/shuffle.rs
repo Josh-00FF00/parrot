@@ -1,6 +1,8 @@
 use crate::{
-    errors::ParrotError, handlers::track_end::update_queue_messages,
-    messaging::message::ParrotMessage, utils::create_response,
+    errors::ParrotError,
+    handlers::track_end::update_queue_messages,
+    messaging::message::ParrotMessage,
+    utils::{command_guild_id, create_response},
 };
 use rand::Rng;
 use serenity::{all::CommandInteraction, client::Context};
@@ -11,7 +13,7 @@ pub async fn shuffle(
     ctx: &Context,
     interaction: &mut CommandInteraction,
 ) -> Result<(), ParrotError> {
-    let guild_id = interaction.guild_id.unwrap();
+    let guild_id = command_guild_id(interaction)?;
     let manager = songbird::get(ctx).await.unwrap();
     let call = manager.get(guild_id).unwrap();
 
