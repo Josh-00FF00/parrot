@@ -5,7 +5,6 @@ use std::{
     io::{self, Read, Seek, Write},
     str::FromStr,
     sync::{Arc, LazyLock},
-    thread,
     time::Duration,
 };
 
@@ -29,12 +28,11 @@ use songbird::input::{AudioStream, AudioStreamError, AuxMetadata, Compose, Input
 use symphonia::core::io::MediaSource;
 use tiny_http::{Server, SslConfig};
 use tokio::sync::Mutex as TMutex;
-use tokio::{runtime::Handle, sync::oneshot};
 use tracing::{error, info, instrument};
 use url::Url;
 use zerocopy::IntoBytes;
 
-use librespot::playback::player::{Decoder, PlayerTrackLoader};
+use librespot::playback::player::{Decoder, PlayerLoadedTrackData, PlayerTrackLoader};
 use thiserror::Error;
 
 use crate::{
@@ -72,7 +70,7 @@ pub static SPOTIFY_QUERY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 pub static RESPOT: LazyLock<TMutex<Result<Respot, ParrotError>>> =
     LazyLock::new(|| TMutex::new(Err(ParrotError::Other("no auth respot attempts"))));
 
-const DEFAULT_SPOTIFY_DEVICE_ID: &str = "6f3a1e2b-9c4d-4e8f-a1b2-3c5d7e9f0a1b";
+const DEFAULT_SPOTIFY_DEVICE_ID: &str = "6f3a1e2b-9c4d-4e8f-a1b2-3c5d7e9f6969";
 
 static REFRESH_TOKEN: TMutex<Option<String>> = TMutex::const_new(None);
 
@@ -319,61 +317,11 @@ impl Compose for RespotTrack {
     async fn create_async(
         &mut self,
     ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        let session = match respot_session().await {
-            Ok(session) => session,
-            Err(e) => {
-                error!("Failed to obtain a Spotify session: {e:?}");
-                return Err(AudioStreamError::Fail("no spotify session".into()));
-            }
-        };
-
-        let ptl = PlayerTrackLoader {
-            session,
-            config: PlayerConfig::default(),
-            local_file_lookup: Arc::new(local_file::create_local_file_lookup(&[])),
-        };
-
-        info!("Creating in async!");
-
-        let handle = Handle::current();
-        let track_uri = self.track.clone();
-        let (result_tx, result_rx) = oneshot::channel();
-
-        thread::spawn(move || {
-            let mut data = handle.block_on(ptl.load_track(track_uri.clone(), 0));
-
-            if data.is_none() {
-                handle.block_on(async {
-                    match refresh_session().await {
-                        Ok(session) => {
-                            info!("Reauthed Spotify session, retrying track load");
-                            let ptl = PlayerTrackLoader {
-                                session,
-                                config: PlayerConfig::default(),
-                                local_file_lookup: Arc::new(local_file::create_local_file_lookup(
-                                    &[],
-                                )),
-                            };
-                            data = handle.block_on(ptl.load_track(track_uri, 0));
-                        }
-                        Err(e) => error!("Failed to reauth Spotify session: {e:?}"),
-                    }
-                });
-            }
-
-            if let Some(data) = data {
-                let _ = result_tx.send(data);
-            }
-        });
-
-        let track = match result_rx.await {
-            Ok(track) => track,
-            Err(_) => {
-                error!("Failed to load Spotify track");
-                return Err(AudioStreamError::Fail(
-                    "failed to load spotify track".into(),
-                ));
-            }
+        let Some(track) = respot_load_track(self.track.clone()).await else {
+            error!("Failed to load Spotify track");
+            return Err(AudioStreamError::Fail(
+                "failed to load spotify track".into(),
+            ));
         };
 
         info!("Got track");
@@ -419,6 +367,40 @@ impl Compose for RespotTrack {
             title: Some(track.name),
             thumbnail: None,
         })
+    }
+}
+
+async fn respot_load_track(uri: SpotifyUri) -> Option<PlayerLoadedTrackData> {
+    let session = match respot_session().await {
+        Ok(session) => session,
+        Err(e) => {
+            error!("Failed to obtain a Spotify session: {e:?}");
+            return None;
+        }
+    };
+
+    let data = track_loader(session).load_track(uri.clone(), 0).await;
+
+    if data.is_some() {
+        return data;
+    }
+
+    error!("Failed to load Spotify track, retrying after reauth");
+
+    match refresh_session().await {
+        Ok(session) => track_loader(session).load_track(uri, 0).await,
+        Err(e) => {
+            error!("Failed to reauth Spotify session: {e:?}");
+            None
+        }
+    }
+}
+
+fn track_loader(session: Session) -> PlayerTrackLoader {
+    PlayerTrackLoader {
+        session,
+        config: PlayerConfig::default(),
+        local_file_lookup: Arc::new(local_file::create_local_file_lookup(&[])),
     }
 }
 
