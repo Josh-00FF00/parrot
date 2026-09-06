@@ -14,7 +14,7 @@ use songbird::{input::AuxMetadata, tracks::TrackHandle};
 use std::{
     fs::File,
     io::{self, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -25,6 +25,19 @@ use url::Url;
 use crate::{errors::ParrotError, messaging::message::ParrotMessage};
 
 pub static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub fn cookies_path() -> Option<PathBuf> {
+    let dir = std::env::var("CREDENTIALS_DIRECTORY").ok()?;
+    let path = Path::new(&dir).join("cookies.txt");
+    path.exists().then_some(path)
+}
+
+pub fn yt_dlp_cookie_args() -> Vec<String> {
+    match cookies_path() {
+        Some(path) => vec!["--cookies".to_string(), path.to_string_lossy().into_owned()],
+        None => Vec::new(),
+    }
+}
 
 pub fn get_reqwest_client() -> &'static reqwest::Client {
     REQWEST_CLIENT.get_or_init(|| {

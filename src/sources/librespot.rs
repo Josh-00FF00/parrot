@@ -74,11 +74,15 @@ const DEFAULT_SPOTIFY_DEVICE_ID: &str = "6f3a1e2b-9c4d-4e8f-a1b2-3c5d7e9f6969";
 
 static REFRESH_TOKEN: TMutex<Option<String>> = TMutex::const_new(None);
 
+static REFRESH_LOCK: TMutex<()> = TMutex::const_new(());
+
 pub async fn set_refresh_token(token: &str) {
     *REFRESH_TOKEN.lock().await = Some(token.to_string());
 }
 
 pub async fn refresh_session() -> Result<Session, ParrotError> {
+    let _refresh_guard = REFRESH_LOCK.lock().await;
+
     let refresh_token = REFRESH_TOKEN
         .lock()
         .await

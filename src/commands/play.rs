@@ -9,11 +9,12 @@ use crate::{
     },
     sources::{
         librespot::{Respot, SpotifyError},
-        youtube::YouTube,
+        youtube::{YouTube, YouTubeTrack},
     },
     utils::{
         command_guild_id, compare_domains, create_now_playing_embed, create_response,
         edit_embed_response, edit_response, get_human_readable_timestamp, track_to_meta,
+        yt_dlp_cookie_args,
     },
 };
 use librespot::core::SpotifyUri;
@@ -45,8 +46,12 @@ pub enum Mode {
 #[derive(Clone)]
 pub enum QueryType {
     Keywords(String),
-    KeywordList(Vec<String>),
     VideoLink(String),
+    VideoMeta {
+        url: String,
+        title: Option<String>,
+        duration: Option<f64>,
+    },
     PlaylistLink(String),
     SpotifyUri(SpotifyUri),
 }
@@ -165,25 +170,18 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                 update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             QueryType::PlaylistLink(url) => {
-                let urls = YouTube::ytdl_playlist(&url, mode)
+                let entries = YouTube::ytdl_playlist(&url, mode)
                     .await
                     .ok_or(ParrotError::Other("failed to fetch playlist"))?;
 
-                for url in urls.iter() {
-                    let Ok(queue) =
-                        enqueue_track(&call, &QueryType::VideoLink(url.to_string())).await
-                    else {
+                for entry in entries {
+                    let Ok(_) = enqueue_track(&call, &QueryType::from(entry)).await else {
                         continue;
                     };
-                    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
                 }
-            }
-            QueryType::KeywordList(keywords_list) => {
-                for keywords in keywords_list.iter() {
-                    let queue =
-                        enqueue_track(&call, &QueryType::Keywords(keywords.to_string())).await?;
-                    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
-                }
+
+                let queue = call.lock().await.queue().current_queue();
+                update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             QueryType::SpotifyUri(spotify_uri) => match spotify_uri {
                 SpotifyUri::Track { id: _ } => {
@@ -198,6 +196,7 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                 }
                 _ => return Err(ParrotError::Spotify(SpotifyError::Todo)),
             },
+            _ => return Ok(()),
         },
         Mode::Next => match query_type.clone() {
             QueryType::Keywords(_)
@@ -207,26 +206,21 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                 update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             QueryType::PlaylistLink(url) => {
-                let urls = YouTube::ytdl_playlist(&url, mode)
+                let entries = YouTube::ytdl_playlist(&url, mode)
                     .await
                     .ok_or(ParrotError::Other("failed to fetch playlist"))?;
 
-                for (idx, url) in urls.into_iter().enumerate() {
-                    let Ok(queued) = insert_track(&call, &QueryType::VideoLink(url), idx + 1).await
-                    else {
+                for (idx, entry) in entries.into_iter().enumerate() {
+                    let Ok(_) = insert_track(&call, &QueryType::from(entry), idx + 1).await else {
                         continue;
                     };
-                    update_queue_messages(&ctx.http, &ctx.data, &queued, guild_id).await;
                 }
-            }
-            QueryType::KeywordList(keywords_list) => {
-                for (idx, keywords) in keywords_list.into_iter().enumerate() {
-                    let queue =
-                        insert_track(&call, &QueryType::Keywords(keywords), idx + 1).await?;
-                    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
-                }
+
+                let queue = call.lock().await.queue().current_queue();
+                update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             QueryType::SpotifyUri(_) => return Err(ParrotError::Spotify(SpotifyError::Todo)),
+            _ => return Ok(()),
         },
         Mode::Jump => match query_type.clone() {
             QueryType::Keywords(_)
@@ -243,66 +237,46 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                 update_queue_messages(&ctx.http, &ctx.data, &queued, guild_id).await;
             }
             QueryType::PlaylistLink(url) => {
-                let urls = YouTube::ytdl_playlist(&url, mode)
+                let entries = YouTube::ytdl_playlist(&url, mode)
                     .await
                     .ok_or(ParrotError::Other("failed to fetch playlist"))?;
 
                 let mut insert_idx = 1;
 
-                for (i, url) in urls.into_iter().enumerate() {
-                    let Ok(mut queued) =
-                        insert_track(&call, &QueryType::VideoLink(url), insert_idx).await
+                for (i, entry) in entries.into_iter().enumerate() {
+                    let Ok(_) = insert_track(&call, &QueryType::from(entry), insert_idx).await
                     else {
                         continue;
                     };
 
                     if i == 0 && !queue_was_empty {
                         let handler = call.lock().await;
-                        queued = force_skip_top_track(handler.queue()).await?;
+                        force_skip_top_track(handler.queue()).await?;
                     } else {
                         insert_idx += 1;
                     }
-
-                    update_queue_messages(&ctx.http, &ctx.data, &queued, guild_id).await;
                 }
-            }
-            QueryType::KeywordList(keywords_list) => {
-                let mut insert_idx = 1;
 
-                for (i, keywords) in keywords_list.into_iter().enumerate() {
-                    let mut queued =
-                        insert_track(&call, &QueryType::Keywords(keywords), insert_idx).await?;
-
-                    if i == 0 && !queue_was_empty {
-                        let handler = call.lock().await;
-                        queued = force_skip_top_track(handler.queue()).await?;
-                    } else {
-                        insert_idx += 1;
-                    }
-
-                    update_queue_messages(&ctx.http, &ctx.data, &queued, guild_id).await;
-                }
+                let queue = call.lock().await.queue().current_queue();
+                update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             QueryType::SpotifyUri(_) => return Err(ParrotError::Spotify(SpotifyError::Todo)),
+            _ => return Ok(()),
         },
         Mode::All | Mode::Reverse | Mode::Shuffle => match query_type.clone() {
             QueryType::VideoLink(url) | QueryType::PlaylistLink(url) => {
-                let urls = YouTube::ytdl_playlist(&url, mode)
+                let entries = YouTube::ytdl_playlist(&url, mode)
                     .await
                     .ok_or(ParrotError::Other("failed to fetch playlist"))?;
 
-                for url in urls.into_iter() {
-                    let Ok(queue) = enqueue_track(&call, &QueryType::VideoLink(url)).await else {
+                for entry in entries {
+                    let Ok(_) = enqueue_track(&call, &QueryType::from(entry)).await else {
                         continue;
                     };
-                    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
                 }
-            }
-            QueryType::KeywordList(keywords_list) => {
-                for keywords in keywords_list.into_iter() {
-                    let queue = enqueue_track(&call, &QueryType::Keywords(keywords)).await?;
-                    update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
-                }
+
+                let queue = call.lock().await.queue().current_queue();
+                update_queue_messages(&ctx.http, &ctx.data, &queue, guild_id).await;
             }
             _ => {
                 edit_response(&ctx.http, interaction, ParrotMessage::PlayAllFailed).await?;
@@ -319,7 +293,10 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
             if let Some(estimated_time) = calculate_time_until_play(&snapshot, mode).await {
                 match (query_type, mode) {
                     (
-                        QueryType::SpotifyUri(_) | QueryType::VideoLink(_) | QueryType::Keywords(_),
+                        QueryType::SpotifyUri(_)
+                        | QueryType::VideoLink(_)
+                        | QueryType::VideoMeta { .. }
+                        | QueryType::Keywords(_),
                         Mode::Next,
                     ) => {
                         let Some(track) = snapshot.get(1) else {
@@ -330,7 +307,10 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
                         edit_embed_response(&ctx.http, interaction, embed).await?;
                     }
                     (
-                        QueryType::SpotifyUri(_) | QueryType::VideoLink(_) | QueryType::Keywords(_),
+                        QueryType::SpotifyUri(_)
+                        | QueryType::VideoLink(_)
+                        | QueryType::VideoMeta { .. }
+                        | QueryType::Keywords(_),
                         Mode::End,
                     ) => {
                         let Some(track) = snapshot.last() else {
@@ -340,7 +320,7 @@ pub async fn play(ctx: &Context, interaction: &mut CommandInteraction) -> Result
 
                         edit_embed_response(&ctx.http, interaction, embed).await?;
                     }
-                    (QueryType::PlaylistLink(_) | QueryType::KeywordList(_), _) => {
+                    (QueryType::PlaylistLink(_), _) => {
                         edit_response(&ctx.http, interaction, ParrotMessage::PlaylistQueued)
                             .await?;
                     }
@@ -434,25 +414,49 @@ async fn create_queued_embed(
         .footer(CreateEmbedFooter::new(footer_text))
 }
 
-async fn get_track_source(query_type: QueryType) -> Input {
+async fn get_track_source(query_type: QueryType) -> Result<Input, ParrotError> {
     // Fine to clone since the client uses an Arc internally
     let client = crate::utils::get_reqwest_client().clone();
 
-    match query_type {
-        QueryType::VideoLink(query) => YoutubeDl::new(client, query).into(),
-        QueryType::Keywords(search) => YoutubeDl::new_search(client, search).into(),
+    Ok(match query_type {
+        QueryType::VideoLink(query) => YoutubeDl::new(client, query)
+            .user_args(yt_dlp_cookie_args())
+            .into(),
+        QueryType::VideoMeta {
+            url,
+            title,
+            duration,
+        } => YouTubeTrack::new(url, title, duration).into(),
+        QueryType::Keywords(search) => YoutubeDl::new_search(client, search)
+            .user_args(yt_dlp_cookie_args())
+            .into(),
         QueryType::SpotifyUri(id) => Respot::new_track(id).await,
-        QueryType::KeywordList(_) => todo!(),
-        QueryType::PlaylistLink(_) => todo!(),
-    }
+        QueryType::PlaylistLink(_) => {
+            return Err(ParrotError::Other("cannot play a playlist directly"));
+        }
+    })
 }
 
 async fn make_track(query_type: &QueryType) -> Result<Track, ParrotError> {
-    let mut source = get_track_source(query_type.clone()).await;
-    let meta = source
-        .aux_metadata()
-        .await
-        .map_err(|e| ParrotError::OtherS(format!("Failed to read aux_metadata() {e:?}")))?;
+    let (source, meta) = match query_type {
+        QueryType::VideoMeta {
+            url,
+            title,
+            duration,
+        } => {
+            let track = YouTubeTrack::new(url.clone(), title.clone(), *duration);
+            let meta = track.metadata();
+            (track.into(), meta)
+        }
+        _ => {
+            let mut source = get_track_source(query_type.clone()).await?;
+            let meta = source
+                .aux_metadata()
+                .await
+                .map_err(|e| ParrotError::OtherS(format!("Failed to read aux_metadata() {e:?}")))?;
+            (source, meta)
+        }
+    };
 
     let mut track: Track = source.into();
     track.user_data = Arc::new(meta);
