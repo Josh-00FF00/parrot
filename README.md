@@ -27,6 +27,27 @@ Additional optional environment variables:
 
 Spotify playback requires a one-time `/login` command in Discord to authorise the bot with your Spotify account.
 
+### Permissions
+
+Parrot needs the following permissions in a server:
+
+| Permission | Reason |
+| --- | --- |
+| View Channels | see the text and voice channels |
+| Send Messages | reply to slash commands |
+| Embed Links | send the rich embed responses (queue, now playing, etc.) |
+| Connect | join your voice channel |
+| Speak | stream audio in the voice channel |
+| Deafen Members | self-deafen when joining voice |
+
+The permissions integer for these is `11553792`. Invite the bot with:
+
+```
+https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=11553792&scope=bot+applications.commands
+```
+
+Replace `YOUR_APP_ID` with your application id (the same value as `DISCORD_APP_ID`). The `applications.commands` scope is required for slash commands to appear.
+
 ### Docker
 
 ```shell
