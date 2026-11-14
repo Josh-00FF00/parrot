@@ -1,0 +1,32 @@
+name: Build Linux Flake
+
+on:
+  push:
+    branches: [ fork/nix ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      matrix:
+        # Runs two concurrent jobs for x86_64-linux and aarch64-linux
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: jawsh
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Build default package
+        run: nix build .#default
