@@ -65,7 +65,7 @@
                     pkgs.lib.makeBinPath [
                       pkgs.ffmpeg-full
                       pkgs.yt-dlp
-                      pkgs.nodejs
+                      pkgs.deno
                     ]
                   }
               '';
