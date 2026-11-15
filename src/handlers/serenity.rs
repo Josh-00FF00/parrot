@@ -4,11 +4,11 @@ use crate::{
         queue::*, remove::*, repeat::*, resume::*, seek::*, shuffle::*, skip::*, stop::*,
         summon::*, version::*, voteskip::*,
     },
-    connection::{check_voice_connections, Connection},
+    connection::{Connection, check_voice_connections},
     errors::ParrotError,
     guild::settings::{GuildSettings, GuildSettingsMap},
     handlers::track_end::update_queue_messages,
-    sources::spotify::{Spotify, SPOTIFY},
+    sources::spotify::{SPOTIFY, Spotify},
     utils::create_response_text,
 };
 use serenity::{
@@ -22,13 +22,14 @@ use serenity::{
     },
     prelude::Mentionable,
 };
+use tracing::{debug, error, info, warn};
 
 pub struct SerenityHandler;
 
 #[async_trait]
 impl EventHandler for SerenityHandler {
     async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("🦜 {} is connected!", ready.user.name);
+        info!("🦜 {} is connected!", ready.user.name);
 
         // sets parrot activity status message to /play
         let activity = ActivityData::listening("/play");
@@ -232,17 +233,17 @@ impl SerenityHandler {
         match Command::set_global_commands(&ctx.http, commands).await {
             Ok(cmds) => cmds,
             Err(e) => {
-                eprintln!("[ERROR] Failed to create global commands: {}", e);
+                error!("[ERROR] Failed to create global commands: {}", e);
                 vec![]
             }
         }
     }
 
     async fn load_guilds_settings(&self, ctx: &Context, ready: &Ready) {
-        println!("[INFO] Loading guilds' settings");
+        info!("[INFO] Loading guilds' settings");
         let mut data = ctx.data.write().await;
         for guild in &ready.guilds {
-            println!("[DEBUG] Loading guild settings for {:?}", guild);
+            debug!("[DEBUG] Loading guild settings for {:?}", guild);
             let settings = data.get_mut::<GuildSettingsMap>().unwrap();
 
             let guild_settings = settings
@@ -250,10 +251,7 @@ impl SerenityHandler {
                 .or_insert_with(|| GuildSettings::new(guild.id));
 
             if let Err(err) = guild_settings.load_if_exists() {
-                println!(
-                    "[ERROR] Failed to load guild {} settings due to {}",
-                    guild.id, err
-                );
+                error!("[ERROR] Failed to load guild {} settings {}", guild.id, err);
             }
         }
     }
@@ -362,7 +360,7 @@ impl SerenityHandler {
                     .edit_member(&ctx.http, new.user_id, EditMember::new().deafen(true))
                     .await
                 {
-                    eprintln!("[WARN] Failed to self-deafen: {}", e);
+                    warn!("Failed to self-deafen: {}", e);
                 }
             }
         }
