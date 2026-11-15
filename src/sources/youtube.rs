@@ -1,6 +1,7 @@
 use crate::commands::play::{Mode, QueryType};
 use serde_json::Value;
 use songbird::input::{AuxMetadata, Compose, Input, YoutubeDl};
+use tracing::info;
 use std::io::BufRead;
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -37,6 +38,7 @@ impl YouTubeRestartable {
         let metadata = source.aux_metadata().await.map_err(|e| {
             crate::errors::ParrotError::TrackFail(format!("Failed to get metadata: {}", e))
         })?;
+        info!("Got track: {:?} {:?}", source, metadata);
         Ok((source.into(), metadata))
     }
 

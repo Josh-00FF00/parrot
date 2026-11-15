@@ -65,6 +65,7 @@
                     pkgs.lib.makeBinPath [
                       pkgs.ffmpeg-full
                       pkgs.yt-dlp
+                      pkgs.nodejs
                     ]
                   }
               '';
@@ -81,7 +82,14 @@
           craneLib = crane.mkLib pkgs;
         in
         {
-          default = craneLib.devShell {};
+          default = craneLib.devShell {
+            # Make the same tools available in your local development environment
+            packages = [
+              pkgs.ffmpeg-full
+              pkgs.yt-dlp
+              pkgs.nodejs
+            ];
+          };
         }
       );
     };
