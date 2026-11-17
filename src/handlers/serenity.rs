@@ -372,6 +372,7 @@ impl SerenityHandler {
         interaction: &mut serenity::all::CommandInteraction,
         err: ParrotError,
     ) {
+        error!("Parrot error {}", err);
         create_response_text(&ctx.http, interaction, &format!("{err}"))
             .await
             .expect("failed to create response");

@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         # Runs two concurrent jobs for x86_64-linux and aarch64-linux
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-latest, ubuntu-24.04-arm, ubuntu-24.04-arm64]
     runs-on: ${{ matrix.os }}
 
     steps:
