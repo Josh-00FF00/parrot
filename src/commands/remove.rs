@@ -1,6 +1,6 @@
 use crate::{
     commands::play::get_track_metadata,
-    errors::{verify, ParrotError},
+    errors::{ParrotError, verify},
     handlers::track_end::update_queue_messages,
     messaging::message::ParrotMessage,
     messaging::messages::REMOVED_QUEUE,

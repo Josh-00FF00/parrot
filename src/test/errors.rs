@@ -1,4 +1,4 @@
-use crate::errors::{verify, ParrotError};
+use crate::errors::{ParrotError, verify};
 
 #[test]
 fn test_verify_bools() {

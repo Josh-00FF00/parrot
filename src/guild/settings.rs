@@ -4,7 +4,7 @@ use serenity::{model::id::GuildId, prelude::TypeMapKey};
 use std::{
     collections::{HashMap, HashSet},
     env,
-    fs::{create_dir_all, rename, OpenOptions},
+    fs::{OpenOptions, create_dir_all, rename},
     io::{BufReader, BufWriter},
     path::Path,
 };

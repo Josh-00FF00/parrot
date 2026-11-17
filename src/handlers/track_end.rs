@@ -5,7 +5,7 @@ use serenity::{
     model::id::GuildId,
     prelude::{Mutex, RwLock, TypeMap},
 };
-use songbird::{tracks::TrackHandle, Call, Event, EventContext, EventHandler};
+use songbird::{Call, Event, EventContext, EventHandler, tracks::TrackHandle};
 use std::sync::Arc;
 
 use crate::{

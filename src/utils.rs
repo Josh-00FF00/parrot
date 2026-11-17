@@ -1,4 +1,5 @@
 use serenity::{
+    Error,
     all::{
         CommandInteraction, CreateInteractionResponse, CreateInteractionResponseMessage,
         EditInteractionResponse,
@@ -6,7 +7,6 @@ use serenity::{
     builder::CreateEmbed,
     http::{Http, HttpError},
     model::channel::Message,
-    Error,
 };
 use songbird::tracks::TrackHandle;
 use std::{sync::Arc, time::Duration};

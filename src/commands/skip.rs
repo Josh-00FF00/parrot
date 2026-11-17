@@ -1,11 +1,11 @@
 use crate::{
     commands::play::get_track_metadata,
-    errors::{verify, ParrotError},
+    errors::{ParrotError, verify},
     messaging::message::ParrotMessage,
     utils::create_response,
 };
 use serenity::{all::CommandInteraction, client::Context};
-use songbird::{tracks::TrackHandle, Call};
+use songbird::{Call, tracks::TrackHandle};
 use std::cmp::min;
 use tokio::sync::MutexGuard;
 

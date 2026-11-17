@@ -1,5 +1,5 @@
 use crate::{
-    errors::{verify, ParrotError},
+    errors::{ParrotError, verify},
     messaging::message::ParrotMessage,
     utils::create_response,
 };

@@ -4,7 +4,7 @@ use crate::{
     guild::cache::GuildCacheMap,
     handlers::track_end::ModifyQueueHandler,
     messaging::messages::{
-        QUEUE_EXPIRED, QUEUE_NOTHING_IS_PLAYING, QUEUE_NOW_PLAYING, QUEUE_NO_SONGS, QUEUE_PAGE,
+        QUEUE_EXPIRED, QUEUE_NO_SONGS, QUEUE_NOTHING_IS_PLAYING, QUEUE_NOW_PLAYING, QUEUE_PAGE,
         QUEUE_PAGE_OF, QUEUE_UP_NEXT,
     },
     utils::get_human_readable_timestamp,
@@ -20,7 +20,7 @@ use serenity::{
     model::{channel::Message, id::GuildId},
     prelude::{RwLock, TypeMap},
 };
-use songbird::{tracks::TrackHandle, Event, TrackEvent};
+use songbird::{Event, TrackEvent, tracks::TrackHandle};
 use std::{
     cmp::{max, min},
     fmt::Write,
