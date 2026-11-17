@@ -36,6 +36,8 @@ impl EventHandler for IdleHandler {
             let guild_id = self.interaction.guild_id?;
             // idc
             let _ = self.manager.remove(guild_id).await;
+            // unregister so this handler can't fire again and kick a future call
+            return Some(Event::Cancel);
         }
 
         None
