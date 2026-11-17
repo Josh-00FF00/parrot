@@ -50,6 +50,8 @@ impl EventHandler for SerenityHandler {
             return;
         };
 
+        info!("Handling cmd: {command:?}");
+
         if let Err(err) = self.run_command(&ctx, &mut command).await {
             self.handle_error(&ctx, &mut command, err).await
         }
@@ -372,7 +374,7 @@ impl SerenityHandler {
         interaction: &mut serenity::all::CommandInteraction,
         err: ParrotError,
     ) {
-        error!("Parrot error {}", err);
+        error!("Parrot error {:?}", err);
         create_response_text(&ctx.http, interaction, &format!("{err}"))
             .await
             .expect("failed to create response");
