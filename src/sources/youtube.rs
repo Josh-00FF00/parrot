@@ -1,4 +1,5 @@
 use crate::commands::play::{Mode, QueryType};
+use crate::sources::spotify::SpotifyTrack;
 use async_trait::async_trait;
 use serde_json::Value;
 use songbird::input::{
@@ -45,12 +46,82 @@ impl YouTube {
 /// expiring URLs or idle processes. The stream is not seekable.
 #[derive(Clone, Debug)]
 pub struct YtDlpStdout {
-    url: String,
+    source: Source,
     metadata: AuxMetadata,
 }
 
+#[derive(Clone, Debug)]
+enum Source {
+    Url(String),
+    /// A YouTube search, optionally matched against the expected track length.
+    Search {
+        query: String,
+        duration: Option<std::time::Duration>,
+    },
+}
+
+/// Allowed difference between a search result's length and the expected length.
+const DURATION_TOLERANCE_SECS: f64 = 10.0;
+
+/// How many search results to check against the expected length.
+const DURATION_CANDIDATES: u32 = 5;
+
 impl YtDlpStdout {
-    fn spawn(&self) -> std::io::Result<ChildContainer> {
+    pub fn new(url: String, metadata: AuxMetadata) -> Self {
+        Self {
+            source: Source::Url(url),
+            metadata,
+        }
+    }
+
+    /// Plays the best YouTube search result for `query` once the track starts.
+    ///
+    /// When `duration` is known, the first of the top results within ±10 s of it is played,
+    /// which skips music videos with long intros, covers, and extended mixes. If none match,
+    /// the plain top result is played instead.
+    pub fn search(
+        query: &str,
+        duration: Option<std::time::Duration>,
+        metadata: AuxMetadata,
+    ) -> Self {
+        Self {
+            source: Source::Search {
+                query: query.to_string(),
+                duration,
+            },
+            metadata,
+        }
+    }
+
+    /// Returns the URL of the highest-ranked search result whose length is close to `duration`.
+    ///
+    /// Uses a flat search (~1 s): it lists results with their lengths without extracting them.
+    async fn find_match(query: &str, duration: std::time::Duration) -> Option<String> {
+        let output = TokioCommand::new(YTDL_COMMAND)
+            .args(["--flat-playlist", "-j", "--"])
+            .arg(format!("ytsearch{DURATION_CANDIDATES}:{query}"))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+
+        let expected = duration.as_secs_f64();
+        output
+            .stdout
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+            .find(|entry| {
+                entry
+                    .get("duration")
+                    .and_then(Value::as_f64)
+                    .is_some_and(|d| (d - expected).abs() <= DURATION_TOLERANCE_SECS)
+            })
+            .and_then(|entry| entry.get("url")?.as_str().map(str::to_owned))
+    }
+
+    fn spawn(target: &str) -> std::io::Result<ChildContainer> {
         let child = StdCommand::new(YTDL_COMMAND)
             .args([
                 "-f",
@@ -61,7 +132,7 @@ impl YtDlpStdout {
                 "-o",
                 "-",
                 "--",
-                &self.url,
+                target,
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -76,26 +147,43 @@ impl YtDlpStdout {
 #[async_trait]
 impl Compose for YtDlpStdout {
     fn create(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        let container = self.spawn().map_err(|e| {
+        Err(AudioStreamError::Unsupported)
+    }
+
+    async fn create_async(
+        &mut self,
+    ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+        let target = match &self.source {
+            Source::Url(url) => url.clone(),
+            Source::Search { query, duration } => {
+                let matched = match duration {
+                    Some(duration) => Self::find_match(query, *duration).await,
+                    None => None,
+                };
+                matched.unwrap_or_else(|| {
+                    if duration.is_some() {
+                        info!("No duration match for {query:?}, playing top result");
+                    }
+                    format!("ytsearch1:{query}")
+                })
+            }
+        };
+
+        let container = Self::spawn(&target).map_err(|e| {
             AudioStreamError::Fail(if e.kind() == std::io::ErrorKind::NotFound {
                 format!("could not find executable '{YTDL_COMMAND}' on path").into()
             } else {
                 Box::new(e)
             })
         })?;
+
         Ok(AudioStream {
             input: Box::new(ReadOnlySource::new(container)) as Box<dyn MediaSource>,
         })
     }
 
-    async fn create_async(
-        &mut self,
-    ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        self.create()
-    }
-
     fn should_create_async(&self) -> bool {
-        false
+        true
     }
 
     async fn aux_metadata(&mut self) -> Result<AuxMetadata, AudioStreamError> {
@@ -130,10 +218,7 @@ impl YouTubeRestartable {
             })?;
 
         info!("Got track: {url} {:?}", metadata.title);
-        let input = YtDlpStdout {
-            url,
-            metadata: metadata.clone(),
-        };
+        let input = YtDlpStdout::new(url, metadata.clone());
 
         Ok((input.into(), metadata))
     }
@@ -153,6 +238,14 @@ impl YouTubeRestartable {
     ) -> Result<(Input, AuxMetadata), crate::errors::ParrotError> {
         let source = YoutubeDl::new_search(get_http_client().clone(), uri.as_ref().to_string());
         Self::stream_from(source, None).await
+    }
+
+    /// Builds an input for a Spotify track without contacting YouTube; the search runs
+    /// when the track starts playing.
+    pub fn spotify(track: &SpotifyTrack) -> (Input, AuxMetadata) {
+        let metadata = track.aux_metadata();
+        let input = YtDlpStdout::search(&track.search_query(), track.duration, metadata.clone());
+        (input.into(), metadata)
     }
 
     pub async fn ytdl_playlist(uri: &str, mode: Mode) -> Option<Vec<String>> {
@@ -212,5 +305,49 @@ mod tests {
             let packet = parsed.format.next_packet().expect("packet");
             parsed.decoder.decode(&packet).expect("decode");
         }
+    }
+
+    async fn decode_packets(input: Input) {
+        let input = input
+            .make_playable_async(get_codec_registry(), get_probe())
+            .await
+            .expect("probe");
+        let Input::Live(songbird::input::LiveInput::Parsed(mut parsed), _) = input else {
+            panic!("not parsed");
+        };
+        for _ in 0..50 {
+            let packet = parsed.format.next_packet().expect("packet");
+            parsed.decoder.decode(&packet).expect("decode");
+        }
+    }
+
+    fn rick() -> SpotifyTrack {
+        SpotifyTrack {
+            title: "Never Gonna Give You Up".into(),
+            artists: vec!["Rick Astley".into()],
+            album: None,
+            duration: Some(std::time::Duration::from_secs(213)),
+            artwork: None,
+            url: None,
+        }
+    }
+
+    /// Needs network + yt-dlp: `cargo test --lib -- --ignored ytdlp_`
+    #[tokio::test]
+    #[ignore]
+    async fn ytdlp_spotify_search_decodes() {
+        let (input, meta) = YouTubeRestartable::spotify(&rick());
+        assert_eq!(meta.title.as_deref(), Some("Never Gonna Give You Up"));
+        decode_packets(input).await;
+    }
+
+    /// An impossible duration filter must fall back to the unfiltered top result.
+    #[tokio::test]
+    #[ignore]
+    async fn ytdlp_search_falls_back() {
+        let mut track = rick();
+        track.duration = Some(std::time::Duration::from_secs(36_000));
+        let (input, _) = YouTubeRestartable::spotify(&track);
+        decode_packets(input).await;
     }
 }

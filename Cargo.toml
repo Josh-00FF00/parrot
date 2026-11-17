@@ -23,6 +23,7 @@ serde = "1.0.152"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tracing = "0.1.41"
 async-trait = "0.1"
+futures = "0.3"
 # Demuxers for the webm/m4a streams yt-dlp writes to stdout (songbird enables none by default)
 symphonia = { version = "0.5.5", default-features = false, features = ["mkv", "isomp4", "aac"] }
 
